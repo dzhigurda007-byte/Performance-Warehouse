@@ -5,6 +5,9 @@ on:
     branches: ['**']
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   apk:
     runs-on: ubuntu-latest
@@ -35,10 +38,24 @@ jobs:
 
       - name: Build release APK
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
+        run: |
+          ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/PerformanceWarehouse.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: performance-warehouse-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: android/app/build/outputs/apk/release/PerformanceWarehouse.apk
           if-no-files-found: error
+
+      - name: Publish APK to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: Performance Warehouse APK ${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          body: |
+            Сборка из ветки `${{ github.ref_name }}`, коммит ${{ github.sha }}.
+            Установка: скачайте PerformanceWarehouse.apk на телефон и откройте файл.
+          files: android/app/build/outputs/apk/release/PerformanceWarehouse.apk
