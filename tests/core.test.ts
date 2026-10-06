@@ -396,3 +396,19 @@ test('удаление номенклатуры: руководитель и а�
   const r = await B.deleteItems([shovel, 999999]);
   assert.deepEqual([r.deleted, r.archived, r.errors.length], [2, 0, 0]);
 });
+
+test('код ячейки, набранный вручную, распознаётся как ячейка', async () => {
+  const K = as('keeper');
+  const cell = (await K.getCell(cellA))!;
+  for (const typed of [cell.code, `A-${cell.code}`, `a ${cell.code.toLowerCase()}`, `СК1/A/${cell.code}`, ` ск1 / a / ${cell.code} `]) {
+    const r = await K.resolveScan(typed);
+    assert.equal(r.type, 'cell', typed);
+    assert.equal(r.type === 'cell' && r.cell.id, cellA, typed);
+  }
+  assert.equal((await K.resolveScan('Z-9-99')).type, 'none');
+  // одинаковый код ячейки на двух стеллажах — по короткому коду не угадываем, по полному находим
+  const rackB = await as('admin').addRack(whId, 'B');
+  await as('admin').addCells(rackB, 1, 1);
+  assert.equal((await K.resolveScan(cell.code)).type, 'none');
+  assert.equal((await K.resolveScan(`B-${cell.code}`)).type, 'cell');
+});

@@ -169,6 +169,27 @@ export const structure = {
 
   getCell: (ctx: Ctx, id: number) => ctx.db.getFirstAsync<CellAddress>(`${CELL_ADDR_SELECT} WHERE c.id = ?`, id),
 
+  /**
+   * Найти ячейку по набранному вручную коду: «1-01», «A-1-01», «A 1-01» или полный адрес «СК1/A/1-01».
+   * Регистр и пробелы не важны; если код подходит к нескольким ячейкам — не угадываем (null).
+   */
+  async findCellByText(ctx: Ctx, text: string): Promise<CellAddress | null> {
+    const norm = (v: string) => v.toLocaleUpperCase('ru-RU').replace(/\s+/g, '').replace(/[\\/|.]+/g, '/');
+    const t = norm(text);
+    if (!t) return null;
+    const all = await ctx.db.getAllAsync<CellAddress>(CELL_ADDR_SELECT);
+    const by = (f: (c: CellAddress) => string[]) => all.filter((c) => f(c).some((v) => norm(v) === t));
+    for (const match of [
+      by((c) => [c.address ?? '', `${c.warehouse_code}/${c.rack_code}-${c.code}`]),
+      by((c) => [`${c.rack_code}-${c.code}`, `${c.rack_code}/${c.code}`, `${c.rack_code}${c.code}`]),
+      by((c) => [c.code]),
+    ]) {
+      if (match.length === 1) return match[0];
+      if (match.length > 1) return null;
+    }
+    return null;
+  },
+
   listCellsOfWarehouse: (ctx: Ctx, warehouseId: number) =>
     ctx.db.getAllAsync<CellAddress>(`${CELL_ADDR_SELECT} WHERE w.id = ? ORDER BY c.is_buffer DESC, r.code, c.code`,
       warehouseId),

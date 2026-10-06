@@ -97,6 +97,9 @@ export const history = {
         if (box) return { type: 'box', box };
         const k = await custody.findByCode(ctx, t.value);
         if (k) return { type: 'custody', custody: k };
+        // код ячейки, набранный вручную
+        const cell = await structure.findCellByText(ctx, t.value);
+        if (cell) return { type: 'cell', cell };
         return { type: 'none', value: t.value };
       }
     }

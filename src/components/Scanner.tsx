@@ -1,6 +1,6 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useEffect, useRef, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, colors } from './ui';
 
@@ -109,6 +109,8 @@ export function Scanner({
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
+        {/* окно сканера — модальное: на Android клавиатура иначе закрывает поле ручного ввода */}
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
         <View style={st.header}>
           <Text style={st.title}>{title}</Text>
           <Pressable onPress={onClose} hitSlop={12}>
@@ -181,6 +183,7 @@ export function Scanner({
             />
           </View>
         </View>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     </Modal>
   );
@@ -211,6 +214,7 @@ const st = StyleSheet.create({
   bannerText: { fontSize: 18, fontWeight: '700' },
   input: {
     flex: 1,
+    minWidth: 0,
     backgroundColor: '#1F2937',
     color: '#fff',
     borderRadius: 10,

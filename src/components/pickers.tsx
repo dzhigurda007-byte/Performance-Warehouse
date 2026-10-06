@@ -1,6 +1,6 @@
 import { useApi } from '../lib/backend';
 import { useEffect, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { FlatList, KeyboardAvoidingView, Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { formatQty, parseQty, parseScan } from '../core/codes';
 import type { Box, CellAddress, Item, Rack, StockRow, Warehouse } from '../core/types';
@@ -19,7 +19,7 @@ function Sheet({ visible, title, onClose, children }: {
             <Text style={{ color: colors.primary, fontSize: 16 }}>Закрыть</Text>
           </Pressable>
         </View>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
           {children}
         </KeyboardAvoidingView>
       </SafeAreaView>
@@ -47,7 +47,7 @@ export function QtyPrompt({ visible, title, unit, max, initial, onClose, onSubmi
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
         style={{ flex: 1, backgroundColor: '#0008', justifyContent: 'center', padding: 24 }}
       >
         <View style={[s.card, { padding: 20, maxWidth: 440, width: '100%', alignSelf: 'center' }]}>
@@ -64,7 +64,7 @@ export function QtyPrompt({ visible, title, unit, max, initial, onClose, onSubmi
               keyboardType="decimal-pad"
               autoFocus
               selectTextOnFocus
-              style={[s.input, { flex: 1, textAlign: 'center', fontSize: 22 }]}
+              style={[s.input, { flex: 1, minWidth: 0, textAlign: 'center', fontSize: 22 }]}
             />
             <Button title="+" variant="secondary" style={{ width: 52 }}
               onPress={() => setText(formatQty((qty ?? 0) + 1))} />
@@ -192,10 +192,11 @@ export function PlacePicker({ visible, title = 'Место хранения', al
   const [cell, setCell] = useState<CellAddress | null>(null);
   const [boxes, setBoxes] = useState<(Box & { positions: number })[]>([]);
   const [scan, setScan] = useState(false);
+  const [typed, setTyped] = useState('');
 
   useEffect(() => {
     if (!visible) return;
-    setWh(null); setRack(null); setCell(null);
+    setWh(null); setRack(null); setCell(null); setTyped('');
     api.listWarehouses().then((w) => {
       setWhs(w);
       if (w.length === 1) setWh(w[0]);
@@ -231,6 +232,22 @@ export function PlacePicker({ visible, title = 'Место хранения', al
     return false;
   }
 
+  /** Код ячейки, набранный вручную («1-01», «A-1-01», «СК1/A/1-01»). */
+  async function submitTyped() {
+    const v = typed.trim();
+    if (!v) return;
+    try {
+      const r = await api.resolveScan(v);
+      if (r.type === 'cell') return openCell(r.cell.id);
+      if (r.type === 'box' && allowBoxes && !cellOnly) {
+        return onPick({ kind: 'box', boxId: r.box.id, cellId: r.box.cell_id, label: r.box.code });
+      }
+      showError(new Error(`Ячейка «${v}» не найдена. Наберите код как на этикетке, например A-1-01, или выберите из списка.`));
+    } catch (e) {
+      showError(e);
+    }
+  }
+
   async function newBox() {
     if (!cell) return;
     try {
@@ -249,6 +266,12 @@ export function PlacePicker({ visible, title = 'Место хранения', al
       <View style={{ paddingHorizontal: 16 }}>
         <Button title={allowBoxes && !cellOnly ? 'Сканировать QR ячейки или короба' : 'Сканировать QR ячейки'}
           icon="⌗" variant="secondary" onPress={() => setScan(true)} />
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+          <TextInput value={typed} onChangeText={setTyped} placeholder="Код ячейки вручную, напр. A-1-01"
+            placeholderTextColor={colors.muted} autoCapitalize="characters" autoCorrect={false} returnKeyType="search"
+            onSubmitEditing={submitTyped} style={[s.input, { flex: 1, minWidth: 0 }]} />
+          <Button title="Найти" style={{ marginVertical: 0 }} onPress={submitTyped} />
+        </View>
         {crumbs ? (
           <Pressable onPress={back} style={{ paddingVertical: 10 }}>
             <Text style={{ color: colors.primary }}>‹ {crumbs}</Text>
@@ -353,7 +376,7 @@ export function TextPrompt({ visible, title, initial, placeholder, onClose, onSu
   }, [visible, initial]);
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      <KeyboardAvoidingView behavior="padding"
         style={{ flex: 1, backgroundColor: '#0008', justifyContent: 'center', padding: 24 }}>
         <View style={[s.card, { padding: 20, maxWidth: 440, width: '100%', alignSelf: 'center' }]}>
           <Text style={{ fontSize: 17, fontWeight: '700', marginBottom: 12, color: colors.text }}>{title}</Text>

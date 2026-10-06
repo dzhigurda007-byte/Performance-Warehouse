@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { Platform, Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import { ActionMenu, type MenuAction } from '../../components/ActionMenu';
 import { Chips } from '../../components/Chips';
-import { ItemPicker, QtyPrompt, StockPicker, TextPrompt } from '../../components/pickers';
+import { ItemPicker, PlacePicker, QtyPrompt, StockPicker, TextPrompt } from '../../components/pickers';
 import { Scanner, type ScanFeedback } from '../../components/Scanner';
 import {
   Badge, Button, Card, Empty, Field, H1, ListRow, Muted, Section, colors, confirm, notify, s, showError, useFocusLoad,
@@ -66,6 +66,8 @@ export default function DocumentScreen() {
   const [stockReq, setStockReq] = useState<StockReq | null>(null);
   const [textReq, setTextReq] = useState<{ title: string; initial?: string; submit: (t: string) => void } | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
+  // расход: ручной выбор ячейки / короба, откуда берём
+  const [cellPick, setCellPick] = useState(false);
   const [formJob, setFormJob] = useState<FormJob | null>(null);
   // Приход: каждый скан = +1 шт без запроса количества
   const [quick, setQuick] = useState(false);
@@ -630,8 +632,12 @@ export default function DocumentScreen() {
         {canEdit ? (
           <View style={{ marginTop: 12 }}>
             {pickMode || !perms.operate ? (
-              <Button title="Выбрать из остатков" variant="secondary" icon="≣"
-                onPress={() => { setResume(false); openStock({ title: 'Что берём?', pick: issueFromRow }); }} />
+              <>
+                <Button title="Выбрать ячейку вручную" variant="secondary" icon="▦"
+                  onPress={() => { setResume(false); later(() => setCellPick(true)); }} />
+                <Button title="Выбрать из остатков" variant="secondary" icon="≣"
+                  onPress={() => { setResume(false); openStock({ title: 'Что берём?', pick: issueFromRow }); }} />
+              </>
             ) : (
               <Button title={isReceipt ? 'Принять товар из списка (количеством)' : 'Добавить товар из списка'} variant="secondary" icon="+"
                 onPress={() => { setResume(false); openItem({}); }} />
@@ -718,6 +724,18 @@ export default function DocumentScreen() {
               submit: (qty) => api.setPlanQty(id, item.id, qty) });
           } else if (isReceipt) later(() => { receiveItem(item).catch(showError); });
           else issuePlanItem(item);
+        }} />
+      <PlacePicker visible={cellPick} cellOnly title="Откуда берём: выберите ячейку" onClose={() => setCellPick(false)}
+        onPick={async (p) => {
+          setCellPick(false);
+          try {
+            const rows = p.kind === 'box' ? await api.stockInBox(p.boxId) : await api.stockAllInCell(p.cellId);
+            if (p.kind === 'box') setOpenBox({ id: p.boxId, code: p.label.split(' · ').pop() ?? '' });
+            if (!rows.length) notify('Пусто', p.label);
+            else openStock({ title: `${p.label}: что берём?`, rows, pick: issueFromRow });
+          } catch (e) {
+            showError(e);
+          }
         }} />
       <StockPicker visible={stockReq !== null} title={stockReq?.title} rows={stockReq?.rows}
         onClose={() => { setStockReq(null); setResume(false); }}

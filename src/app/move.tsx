@@ -2,7 +2,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { PlacePicker, QtyPrompt, StockPicker, type PickedPlace } from '../components/pickers';
-import { Scanner } from '../components/Scanner';
+import { Scanner, type ScanFeedback } from '../components/Scanner';
 import { Button, Card, Empty, ListRow, Muted, Section, colors, notify, s, showError } from '../components/ui';
 import { formatQty } from '../core/codes';
 import type { StockRow } from '../core/types';
@@ -24,8 +24,12 @@ export default function MoveScreen() {
   const [scan, setScan] = useState(false);
   const [askQty, setAskQty] = useState(false);
   const [pickSource, setPickSource] = useState(false);
+  const [pickSourceCell, setPickSourceCell] = useState(false);
   const [pickTarget, setPickTarget] = useState(false);
   const [pickRow, setPickRow] = useState(false);
+  // шаг 2: сканирование ШК / QR товара (или QR короба) среди того, что лежит в выбранном месте
+  const [itemScan, setItemScan] = useState(false);
+  const [pickRows, setPickRows] = useState<StockRow[] | null>(null);
   const [log, setLog] = useState<string[]>([]);
   const params = useLocalSearchParams<{ cellId?: string; boxId?: string; itemId?: string; lot?: string }>();
 
@@ -97,6 +101,22 @@ export default function MoveScreen() {
     return false;
   }
 
+  async function onItemScan(code: string): Promise<boolean | ScanFeedback> {
+    const r = await api.resolveScan(code);
+    let found: StockRow[] = [];
+    if (r.type === 'item') found = rows.filter((x) => x.item_id === r.item.id);
+    else if (r.type === 'box') found = rows.filter((x) => x.box_id === r.box.id);
+    else return { ok: false, tone: 'red', text: `Код ${code} — не товар. Отсканируйте ШК или QR товара.` };
+    if (!found.length) {
+      const name = r.type === 'item' ? `«${r.item.name}»` : `Короб ${r.box.code}`;
+      return { ok: false, tone: 'red', text: `${name}: нет в «${sourceLabel}»` };
+    }
+    setItemScan(false);
+    if (found.length === 1) chooseRow(found[0]);
+    else setTimeout(() => setPickRows(found), 300); // несколько партий / коробов — уточнить
+    return true;
+  }
+
   async function onTarget(code: string) {
     const r = await api.resolveScan(code);
     if (r.type === 'cell') { setScan(false); await doMove({ cellId: r.cell.id }, r.cell.address); return true; }
@@ -126,10 +146,11 @@ export default function MoveScreen() {
     <ScrollView style={s.screen} contentContainerStyle={s.content}>
       <Card>
         <Text style={{ fontWeight: '700', color: colors.text }}>Шаг 1. Откуда</Text>
-        <Muted>{sourceLabel || 'Отсканируйте ячейку, короб или ШК товара'}</Muted>
+        <Muted>{sourceLabel || 'Отсканируйте ячейку, короб или ШК товара — или выберите ячейку вручную'}</Muted>
+        <Button title="Сканировать" icon="⌗" onPress={() => { reset(); setScan(true); }} />
         <View style={s.rowWrap}>
-          <Button title="Сканировать" icon="⌗" style={{ flex: 1 }} onPress={() => { reset(); setScan(true); }} />
-          <Button title="Выбрать" variant="ghost" style={{ flex: 1 }} onPress={() => { reset(); setPickSource(true); }} />
+          <Button title="Ячейка вручную" icon="▦" variant="secondary" style={{ flex: 1 }} onPress={() => { reset(); setPickSourceCell(true); }} />
+          <Button title="Из остатков" variant="ghost" style={{ flex: 1 }} onPress={() => { reset(); setPickSource(true); }} />
         </View>
       </Card>
 
@@ -140,8 +161,12 @@ export default function MoveScreen() {
             <ListRow title={`${row.item_name}: ${formatQty(qty)} из ${formatQty(row.qty)} ${row.unit}`}
               subtitle={`${row.address ?? ''}${row.box_code ? ' · ' + row.box_code : ''} · приёмка ${row.received_at}`}
               right="изм." onPress={() => setAskQty(true)} />
-          ) : rows.length ? (
-            <Button title={`Выбрать позицию (${rows.length})`} variant="secondary" onPress={() => setPickRow(true)} />
+          ) : null}
+          {rows.length ? (
+            <View style={s.rowWrap}>
+              <Button title="Сканировать товар" icon="⌗" style={{ flex: 1 }} onPress={() => setItemScan(true)} />
+              <Button title={`Выбрать (${rows.length})`} variant="secondary" style={{ flex: 1 }} onPress={() => setPickRow(true)} />
+            </View>
           ) : <Empty text="Здесь пусто" />}
         </Card>
       ) : null}
@@ -168,10 +193,27 @@ export default function MoveScreen() {
         onScan={step === 'target' ? onTarget : onSource} />
       <StockPicker visible={pickRow} title={sourceLabel} rows={rows} onClose={() => setPickRow(false)}
         onPick={(r) => { setPickRow(false); chooseRow(r); }} />
+      <Scanner visible={itemScan} onClose={() => setItemScan(false)} title="Что перемещаем"
+        hint={`ШК / QR товара (или QR короба) из «${sourceLabel}»`} onScan={onItemScan} />
+      <StockPicker visible={pickRows !== null} title="Уточните партию / короб" rows={pickRows ?? []} onClose={() => setPickRows(null)}
+        onPick={(r) => { setPickRows(null); chooseRow(r); }} />
       <StockPicker visible={pickSource} title="Что перемещаем?" onClose={() => setPickSource(false)}
         onPick={(r) => { setPickSource(false); setSourceLabel(r.address ?? ''); setRows([r]); chooseRow(r); }} />
       <QtyPrompt visible={askQty} title={row ? `${row.item_name}: сколько переместить?` : ''} unit={row?.unit} max={row?.qty}
         initial={row?.qty} onClose={() => setAskQty(false)} onSubmit={(q) => { setQty(q); setAskQty(false); }} />
+      <PlacePicker visible={pickSourceCell} cellOnly title="Откуда: выберите ячейку" onClose={() => setPickSourceCell(false)}
+        onPick={async (p: PickedPlace) => {
+          setPickSourceCell(false);
+          try {
+            const list = p.kind === 'box' ? await api.stockInBox(p.boxId) : await api.stockAllInCell(p.cellId);
+            setSourceLabel(p.label);
+            setRows(list);
+            setStep('item');
+            if (list.length === 1) chooseRow(list[0]);
+          } catch (e) {
+            showError(e);
+          }
+        }} />
       <PlacePicker visible={pickTarget} title="Куда переместить" onClose={() => setPickTarget(false)}
         onPick={(p: PickedPlace) => {
           setPickTarget(false);
