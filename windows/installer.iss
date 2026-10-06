@@ -52,7 +52,7 @@ Name: "{commonstartup}\Сервер склада"; Filename: "{app}\start.cmd"; 
 
 [Run]
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Performance Warehouse"""; Flags: runhidden; Tasks: firewall
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Performance Warehouse"" dir=in action=allow protocol=TCP localport=8080 profile=private,domain"; Flags: runhidden; Tasks: firewall
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Performance Warehouse"" dir=in action=allow protocol=TCP localport=8080 profile=any"; Flags: runhidden; Tasks: firewall
 Filename: "{app}\start.cmd"; WorkingDir: "{app}"; Description: "Запустить сервер склада сейчас"; Flags: postinstall nowait shellexec skipifsilent runasoriginaluser
 
 [UninstallRun]

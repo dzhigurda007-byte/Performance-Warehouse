@@ -19,6 +19,7 @@ import { BusinessError, getMeta } from '../../src/core/db';
 import { migrate } from '../../src/core/schema';
 import { auth } from '../../src/core/services/users';
 import { NodeDb } from './nodeDb';
+import { checkNetwork, type NetReport } from './netcheck';
 
 export const VERSION = '2.0.0';
 
@@ -151,6 +152,27 @@ export async function startServer(opts: ServerOptions) {
   const backupTimer = setInterval(doBackup, 60 * 60 * 1000);
   backupTimer.unref();
 
+  // Диагностика сети: VPN, перехватывающий локальную сеть, — частая причина «ПК не видит телефоны».
+  let net: NetReport | null = null;
+  let netWarned = '';
+  const doNetCheck = async () => {
+    try {
+      net = await checkNetwork(opts.port);
+      const key = net.problems.join('|');
+      if (key && key !== netWarned && !opts.quiet) {
+        console.log('');
+        for (const p of net.problems) console.log('  ВНИМАНИЕ: ' + p);
+        console.log('');
+      }
+      netWarned = key;
+    } catch (e) {
+      console.error('[net]', e);
+    }
+  };
+  void doNetCheck();
+  const netTimer = setInterval(doNetCheck, 5 * 60 * 1000);
+  netTimer.unref();
+
   async function currentUser(req: IncomingMessage): Promise<{ user: SessionUser; token: string } | null> {
     const h = req.headers.authorization ?? '';
     const token = h.startsWith('Bearer ') ? h.slice(7).trim() : '';
@@ -215,8 +237,18 @@ export async function startServer(opts: ServerOptions) {
       case '/api/auth/logout':
         await auth.dropSession(db, session.token);
         return send(res, 200, { ok: true });
-      case '/api/server/info':
-        return send(res, 200, { version: VERSION, urls: lanAddresses(opts.port), dataDir: resolve(opts.dataDir) });
+      case '/api/server/info': {
+        if (body.recheck) await doNetCheck();
+        const lan = net?.addresses.filter((a) => a.kind === 'lan').map((a) => a.url) ?? lanAddresses(opts.port);
+        return send(res, 200, {
+          version: VERSION,
+          urls: lan,
+          vpnUrls: net?.addresses.filter((a) => a.kind === 'vpn').map((a) => `${a.url} (${a.iface})`) ?? [],
+          problems: net?.problems ?? [],
+          addresses: net?.addresses ?? [],
+          dataDir: resolve(opts.dataDir),
+        });
+      }
       case '/api/rpc': {
         const method = String(body.method ?? '') as ApiMethod;
         const fn = (api as Record<string, unknown>)[method] as ((c: Ctx, ...a: unknown[]) => Promise<unknown>) | undefined;
@@ -289,7 +321,7 @@ export async function startServer(opts: ServerOptions) {
   return {
     server,
     db,
-    close: () => new Promise<void>((ok) => { clearInterval(backupTimer); server.close(() => { raw.close(); ok(); }); }),
+    close: () => new Promise<void>((ok) => { clearInterval(backupTimer); clearInterval(netTimer); server.close(() => { raw.close(); ok(); }); }),
   };
 }
 
@@ -302,14 +334,17 @@ if (require.main === module) {
   const webArg = arg('web', 'web');
   const webDir = existsSync(resolve(baseDir, webArg)) ? resolve(baseDir, webArg) : null;
   startServer({ port, dataDir, webDir })
-    .then(() => {
-      const urls = lanAddresses(port);
+    .then(async () => {
+      const net = await checkNetwork(port).catch(() => null);
       console.log('');
       console.log('  Performance Warehouse — локальный сервер склада', VERSION);
       console.log('  База данных:', join(dataDir, 'warehouse.db'));
       console.log('');
       console.log('  Рабочее место на этом ПК:  http://localhost:' + port);
-      for (const u of urls) console.log('  Для терминалов по Wi-Fi:   ' + u);
+      for (const a of net?.addresses ?? lanAddresses(port).map((url) => ({ url, kind: 'lan', iface: '' }))) {
+        if (a.kind === 'lan') console.log(`  Для терминалов по Wi-Fi:   ${a.url}${a.iface ? `  (${a.iface})` : ''}`);
+        else console.log(`  VPN, не для терминалов:    ${a.url}  (${a.iface})`);
+      }
       console.log('');
       console.log('  Не закрывайте это окно, пока работает склад.');
       console.log('');

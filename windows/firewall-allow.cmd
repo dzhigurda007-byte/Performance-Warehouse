@@ -8,6 +8,6 @@ if errorlevel 1 (
   exit /b 1
 )
 netsh advfirewall firewall delete rule name="Performance Warehouse" >nul 2>&1
-netsh advfirewall firewall add rule name="Performance Warehouse" dir=in action=allow protocol=TCP localport=8080 profile=private,domain
+netsh advfirewall firewall add rule name="Performance Warehouse" dir=in action=allow protocol=TCP localport=8080 profile=any
 echo Готово: порт 8080 открыт для локальной сети.
 pause

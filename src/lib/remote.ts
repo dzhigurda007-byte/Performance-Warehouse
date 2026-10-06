@@ -18,6 +18,17 @@ export interface InviteInfo {
   orgName: string;
 }
 
+export interface ServerInfo {
+  version: string;
+  /** Адреса в локальной сети — для терминалов. */
+  urls: string[];
+  /** Адреса VPN-интерфейсов — терминалам не подходят. */
+  vpnUrls: string[];
+  /** Найденные проблемы сети (например, VPN перехватывает локальную сеть). */
+  problems: string[];
+  dataDir: string;
+}
+
 export interface AuthResult {
   token: string;
   user: SessionUser;
@@ -43,7 +54,7 @@ async function request<T>(url: string, body: unknown, token?: string | null, tim
       signal: ctrl.signal,
     });
   } catch {
-    throw new BusinessError('Нет связи с сервером склада. Проверьте Wi-Fi и что ПК-сервер включён.', 'network');
+    throw new BusinessError('Нет связи с сервером склада. Проверьте: телефон в Wi-Fi склада, сервер на ПК запущен, брандмауэр открыт, VPN на ПК не перехватывает локальную сеть (на ПК: «Ещё» → «Подключение терминалов»).', 'network');
   } finally {
     clearTimeout(timer);
   }
@@ -68,8 +79,8 @@ export const remoteAuth = {
     request<AuthResult>(`${server}/api/auth/join`, p),
   me: (server: string, token: string) => request<{ user: SessionUser }>(`${server}/api/auth/me`, {}, token),
   logout: (server: string, token: string) => request(`${server}/api/auth/logout`, {}, token).catch(() => undefined),
-  info: (server: string, token: string) =>
-    request<{ version: string; urls: string[]; dataDir: string }>(`${server}/api/server/info`, {}, token),
+  info: (server: string, token: string, recheck = false) =>
+    request<ServerInfo>(`${server}/api/server/info`, { recheck }, token, 30000),
 };
 
 /** API, работающее через сервер склада: вызов → POST /api/rpc. */
