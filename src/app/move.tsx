@@ -1,215 +1,268 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { Pressable, ScrollView, Switch, Text, View } from 'react-native';
+import { ActionMenu, type MenuAction } from '../components/ActionMenu';
 import { PlacePicker, QtyPrompt, StockPicker, type PickedPlace } from '../components/pickers';
 import { Scanner, type ScanFeedback } from '../components/Scanner';
-import { Button, Card, Empty, ListRow, Muted, Section, colors, notify, s, showError } from '../components/ui';
+import { Badge, Button, Card, Empty, Muted, Section, colors, confirm, notify, s, showError } from '../components/ui';
 import { formatQty } from '../core/codes';
+import { round3 } from '../core/db';
 import type { StockRow } from '../core/types';
 import { useApi } from '../lib/backend';
 
-type Step = 'source' | 'item' | 'target';
+/** Позиция в перемещении: конкретная партия в конкретном месте и сколько из неё берём. */
+type CartLine = { key: string; row: StockRow; qty: number };
+
+const lineKey = (r: StockRow) => `${r.item_id}|${r.cell_id ?? 0}|${r.box_id ?? 0}|${r.received_at}`;
+const placeText = (r: StockRow) => `${r.address ?? '—'}${r.box_code ? ' · ' + r.box_code : ''}`;
 
 /**
- * Перемещение товара: сканируем ячейку/короб-источник (или ШК товара),
- * выбираем позицию и количество (весь товар или часть), затем место назначения.
+ * Перемещение нескольких товаров одним документом:
+ *  1) откуда — ячейка / короб / стеллаж (скан, вручную) или сразу ШК товара;
+ *  2) набрать позиции — сканировать ШК / QR товаров (быстрый режим: 1 скан = 1 шт) или выбрать;
+ *     источник можно менять, позиции из разных мест копятся в одном списке;
+ *  3) куда — скан или выбор места → одно перемещение со всеми позициями.
  */
 export default function MoveScreen() {
   const api = useApi();
-  const [step, setStep] = useState<Step>('source');
   const [sourceLabel, setSourceLabel] = useState('');
   const [rows, setRows] = useState<StockRow[]>([]);
-  const [row, setRow] = useState<StockRow | null>(null);
-  const [qty, setQty] = useState(0);
-  const [scan, setScan] = useState(false);
-  const [askQty, setAskQty] = useState(false);
-  const [pickSource, setPickSource] = useState(false);
-  const [pickSourceCell, setPickSourceCell] = useState(false);
-  const [pickTarget, setPickTarget] = useState(false);
-  const [pickRow, setPickRow] = useState(false);
-  // шаг 2: сканирование ШК / QR товара (или QR короба) среди того, что лежит в выбранном месте
-  const [itemScan, setItemScan] = useState(false);
-  const [pickRows, setPickRows] = useState<StockRow[] | null>(null);
+  // как перечитать содержимое источника после перемещения
+  const [reloadSource, setReloadSource] = useState<(() => Promise<StockRow[]>) | null>(null);
+  const [cart, setCart] = useState<CartLine[]>([]);
+  const [quick, setQuick] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [log, setLog] = useState<string[]>([]);
+
+  // окна
+  const [scanMode, setScanMode] = useState<'items' | 'target' | null>(null);
+  const [pickSourceCell, setPickSourceCell] = useState(false);
+  const [pickStock, setPickStock] = useState<{ title: string; rows?: StockRow[] } | null>(null);
+  const [pickTarget, setPickTarget] = useState(false);
+  const [qtyReq, setQtyReq] = useState<{ row: StockRow; initial?: number; replace?: boolean } | null>(null);
+  const [menu, setMenu] = useState<{ title: string; subtitle?: string; actions: MenuAction[] } | null>(null);
+
   const params = useLocalSearchParams<{ cellId?: string; boxId?: string; itemId?: string; lot?: string }>();
 
   // Открыто из карточки ячейки / короба: позиция уже выбрана.
   useEffect(() => {
-    if (!params.itemId || (!params.cellId && !params.boxId)) return;
+    if (!params.cellId && !params.boxId) return;
     (async () => {
-      const list = params.boxId ? await api.stockInBox(Number(params.boxId)) : await api.stockLooseInCell(Number(params.cellId));
-      const r = list.find((x) => x.item_id === Number(params.itemId) && (!params.lot || x.received_at === params.lot));
-      if (r) {
-        setSourceLabel(`${r.address ?? ''}${r.box_code ? ' · ' + r.box_code : ''}`);
-        setRows(list);
-        chooseRow(r);
-      }
+      const loader = params.boxId ? () => api.stockInBox(Number(params.boxId)) : () => api.stockAllInCell(Number(params.cellId));
+      const list = await loader();
+      setSource(list[0] ? placeText(list[0]) : 'Источник', list, loader);
+      const r = params.itemId ? list.find((x) => x.item_id === Number(params.itemId) && (!params.lot || x.received_at === params.lot)) : undefined;
+      if (r) askQty(r);
     })().catch(showError);
   }, [params.itemId, params.cellId, params.boxId, params.lot]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function reset() {
-    setStep('source');
-    setRow(null);
-    setRows([]);
-    setSourceLabel('');
+  /** Сколько из этой партии ещё можно взять (с учётом уже набранного). */
+  const inCart = (r: StockRow) => cart.find((c) => c.key === lineKey(r))?.qty ?? 0;
+  const freeOf = (r: StockRow) => round3(r.qty - inCart(r));
+
+  function addToCart(r: StockRow, qty: number, replace = false) {
+    setCart((c) => {
+      const k = lineKey(r);
+      const ex = c.find((x) => x.key === k);
+      if (!ex) return qty > 0 ? [...c, { key: k, row: r, qty }] : c;
+      const next = replace ? qty : round3(ex.qty + qty);
+      return next > 0 ? c.map((x) => (x.key === k ? { ...x, qty: next } : x)) : c.filter((x) => x.key !== k);
+    });
   }
 
-  function chooseRow(r: StockRow) {
-    setRow(r);
-    setStep('item');
-    setTimeout(() => setAskQty(true), 300);
+  const askQty = (row: StockRow, initial?: number, replace = false) => setTimeout(() => setQtyReq({ row, initial, replace }), 250);
+
+  /** Взять позицию: быстрый режим — +1 шт, иначе спросить количество. */
+  function take(r: StockRow): ScanFeedback {
+    const free = freeOf(r);
+    if (free <= 0) return { ok: false, tone: 'yellow', text: `${r.item_name}\nуже набрано всё: ${formatQty(r.qty)} ${r.unit} (${placeText(r)})` };
+    if (quick) {
+      addToCart(r, Math.min(1, free));
+      return { ok: true, tone: 'green', text: `${r.item_name}\n+1 · набрано ${formatQty(inCart(r) + 1)} из ${formatQty(r.qty)} ${r.unit} · ${placeText(r)}` };
+    }
+    setScanMode(null);
+    askQty(r, free);
+    return { ok: true, text: r.item_name };
   }
 
-  async function onSource(code: string) {
+  function setSource(label: string, list: StockRow[], loader: (() => Promise<StockRow[]>) | null) {
+    setSourceLabel(label);
+    setRows(list);
+    setReloadSource(() => loader);
+  }
+
+  /** Скан в режиме набора: QR места — сменить источник; ШК / QR товара — взять товар. */
+  async function onItemsScan(code: string): Promise<boolean | ScanFeedback> {
     const r = await api.resolveScan(code);
-    if (r.type === 'cell') {
-      const list = await api.stockAllInCell(r.cell.id);
-      setScan(false);
-      setSourceLabel(r.cell.address);
-      setRows(list);
-      setStep('item');
-      if (list.length === 1) chooseRow(list[0]);
-      return true;
+    if (r.type === 'cell' || r.type === 'box' || r.type === 'rack') {
+      const loader = r.type === 'cell' ? () => api.stockAllInCell(r.cell.id)
+        : r.type === 'box' ? () => api.stockInBox(r.box.id) : () => api.stockInRack(r.rack.id);
+      const list = await loader();
+      const label = r.type === 'cell' ? r.cell.address : r.type === 'box' ? `Короб ${r.box.code}` : `Стеллаж ${r.rack.code}`;
+      setSource(label, list, loader);
+      return list.length
+        ? { ok: true, tone: 'green', text: `Откуда: ${label}\nпозиций: ${list.length} — сканируйте товары` }
+        : { ok: false, tone: 'red', text: `${label}: пусто` };
     }
-    if (r.type === 'rack') {
-      const list = await api.stockInRack(r.rack.id);
-      setScan(false);
-      setSourceLabel(`Стеллаж ${r.rack.code}`);
-      setRows(list);
-      setStep('item');
-      if (list.length === 1) chooseRow(list[0]);
-      return true;
-    }
-    if (r.type === 'box') {
-      const list = await api.stockInBox(r.box.id);
-      setScan(false);
-      setSourceLabel(`Короб ${r.box.code}`);
-      setRows(list);
-      setStep('item');
-      if (list.length === 1) chooseRow(list[0]);
-      return true;
-    }
-    if (r.type === 'item') {
-      const list = await api.stockByItem(r.item.id);
-      setScan(false);
-      setSourceLabel(`${r.item.name} — все места`);
-      setRows(list);
-      setStep('item');
-      if (list.length === 1) chooseRow(list[0]);
-      return true;
-    }
-    return false;
-  }
-
-  async function onItemScan(code: string): Promise<boolean | ScanFeedback> {
-    const r = await api.resolveScan(code);
-    let found: StockRow[] = [];
-    if (r.type === 'item') found = rows.filter((x) => x.item_id === r.item.id);
-    else if (r.type === 'box') found = rows.filter((x) => x.box_id === r.box.id);
-    else return { ok: false, tone: 'red', text: `Код ${code} — не товар. Отсканируйте ШК или QR товара.` };
+    if (r.type !== 'item') return { ok: false, tone: 'red', text: `Код ${code} не распознан` };
+    // товар ищем в выбранном месте; если место не выбрано — по всему складу (FIFO)
+    let found = rows.filter((x) => x.item_id === r.item.id);
+    if (!sourceLabel) found = await api.stockByItem(r.item.id);
     if (!found.length) {
-      const name = r.type === 'item' ? `«${r.item.name}»` : `Короб ${r.box.code}`;
-      return { ok: false, tone: 'red', text: `${name}: нет в «${sourceLabel}»` };
+      return { ok: false, tone: 'red', text: `«${r.item.name}»: нет ${sourceLabel ? `в «${sourceLabel}»` : 'на складе'}` };
     }
-    setItemScan(false);
-    if (found.length === 1) chooseRow(found[0]);
-    else setTimeout(() => setPickRows(found), 300); // несколько партий / коробов — уточнить
+    const withFree = found.filter((x) => freeOf(x) > 0);
+    if (withFree.length === 1 || (quick && withFree.length)) return take(withFree[0]); // быстрый режим — самая старая партия
+    if (!withFree.length) return take(found[0]);
+    setScanMode(null);
+    setTimeout(() => setPickStock({ title: `«${r.item.name}»: откуда взять?`, rows: withFree }), 300);
     return true;
   }
 
-  async function onTarget(code: string) {
+  async function onTargetScan(code: string): Promise<boolean | ScanFeedback> {
     const r = await api.resolveScan(code);
-    if (r.type === 'cell') { setScan(false); await doMove({ cellId: r.cell.id }, r.cell.address); return true; }
-    if (r.type === 'box') { setScan(false); await doMove({ boxId: r.box.id }, `короб ${r.box.code}`); return true; }
-    return false;
+    if (r.type === 'cell') { setScanMode(null); await doMove({ cellId: r.cell.id }, r.cell.address); return true; }
+    if (r.type === 'box') { setScanMode(null); await doMove({ boxId: r.box.id }, `короб ${r.box.code}`); return true; }
+    return { ok: false, tone: 'red', text: 'Отсканируйте QR ячейки или короба, куда перемещаете' };
   }
 
   async function doMove(to: { cellId?: number; boxId?: number }, label: string) {
-    if (!row) return;
+    if (!cart.length) return;
+    setBusy(true);
     try {
-      await api.moveStock({
-        itemId: row.item_id,
-        from: row.box_id ? { boxId: row.box_id } : { cellId: row.cell_id! },
+      await api.moveMany({
         to: to.boxId ? { boxId: to.boxId } : { cellId: to.cellId! },
-        qty,
-        receivedAt: row.received_at,
+        lines: cart.map((c) => ({
+          itemId: c.row.item_id,
+          from: c.row.box_id ? { boxId: c.row.box_id } : { cellId: c.row.cell_id! },
+          qty: c.qty,
+          receivedAt: c.row.received_at,
+        })),
       });
-      setLog([`${row.item_name}: ${formatQty(qty)} ${row.unit} → ${label}`, ...log].slice(0, 20));
-      notify('Перемещено', `${row.item_name}: ${formatQty(qty)} ${row.unit} → ${label}`);
-      reset();
+      const total = cart.reduce((a, c) => a + c.qty, 0);
+      const text = `${cart.length} поз. (${formatQty(total)} ед.) → ${label}`;
+      setLog([text, ...log].slice(0, 20));
+      notify('Перемещено', `${text}\nОдин документ перемещения.`);
+      setCart([]);
+      // обновить содержимое источника
+      if (reloadSource) setRows(await reloadSource());
     } catch (e) {
       showError(e);
+    } finally {
+      setBusy(false);
     }
   }
 
+  function lineActions(c: CartLine) {
+    setMenu({
+      title: c.row.item_name,
+      subtitle: `${formatQty(c.qty)} из ${formatQty(c.row.qty)} ${c.row.unit} · ${placeText(c.row)}`,
+      actions: [
+        { label: 'Изменить количество', onPress: () => askQty(c.row, c.qty, true) },
+        { label: 'Убрать из перемещения', danger: true, onPress: () => setCart((x) => x.filter((y) => y.key !== c.key)) },
+      ],
+    });
+  }
+
+  const total = useMemo(() => cart.reduce((a, c) => a + c.qty, 0), [cart]);
+
   return (
-    <ScrollView style={s.screen} contentContainerStyle={s.content}>
-      <Card>
-        <Text style={{ fontWeight: '700', color: colors.text }}>Шаг 1. Откуда</Text>
-        <Muted>{sourceLabel || 'Отсканируйте ячейку, короб или ШК товара — или выберите ячейку вручную'}</Muted>
-        <Button title="Сканировать" icon="⌗" onPress={() => { reset(); setScan(true); }} />
-        <View style={s.rowWrap}>
-          <Button title="Ячейка вручную" icon="▦" variant="secondary" style={{ flex: 1 }} onPress={() => { reset(); setPickSourceCell(true); }} />
-          <Button title="Из остатков" variant="ghost" style={{ flex: 1 }} onPress={() => { reset(); setPickSource(true); }} />
-        </View>
-      </Card>
-
-      {step !== 'source' ? (
+    <View style={{ flex: 1 }}>
+      <ScrollView style={s.screen} contentContainerStyle={[s.content, { paddingBottom: cart.length ? 120 : 48 }]}>
         <Card>
-          <Text style={{ fontWeight: '700', color: colors.text }}>Шаг 2. Что и сколько</Text>
-          {row ? (
-            <ListRow title={`${row.item_name}: ${formatQty(qty)} из ${formatQty(row.qty)} ${row.unit}`}
-              subtitle={`${row.address ?? ''}${row.box_code ? ' · ' + row.box_code : ''} · приёмка ${row.received_at}`}
-              right="изм." onPress={() => setAskQty(true)} />
-          ) : null}
-          {rows.length ? (
-            <View style={s.rowWrap}>
-              <Button title="Сканировать товар" icon="⌗" style={{ flex: 1 }} onPress={() => setItemScan(true)} />
-              <Button title={`Выбрать (${rows.length})`} variant="secondary" style={{ flex: 1 }} onPress={() => setPickRow(true)} />
-            </View>
-          ) : <Empty text="Здесь пусто" />}
-        </Card>
-      ) : null}
-
-      {row && qty > 0 ? (
-        <Card style={{ backgroundColor: colors.successSoft }}>
-          <Text style={{ fontWeight: '700', color: colors.text }}>Шаг 3. Куда</Text>
+          <Text style={{ fontWeight: '700', color: colors.text }}>1. Откуда</Text>
+          <Muted>{sourceLabel ? `${sourceLabel} · позиций: ${rows.length}` : 'Не выбрано — сканируйте ячейку / короб или сразу ШК товара (возьмём из самой старой партии)'}</Muted>
           <View style={s.rowWrap}>
-            <Button title="Сканировать место" icon="⌗" style={{ flex: 1 }} onPress={() => { setStep('target'); setScan(true); }} />
-            <Button title="Выбрать" variant="ghost" style={{ flex: 1 }} onPress={() => setPickTarget(true)} />
+            <Button title="Ячейка вручную" icon="▦" variant="secondary" style={{ flex: 1 }} onPress={() => setPickSourceCell(true)} />
+            <Button title="Из остатков" variant="ghost" style={{ flex: 1 }} onPress={() => setPickStock({ title: 'Что перемещаем?' })} />
           </View>
+          {sourceLabel ? <Button title="Сбросить источник" variant="ghost" onPress={() => setSource('', [], null)} /> : null}
         </Card>
-      ) : null}
 
-      {log.length ? (
-        <Section title="Перемещено за сессию">
-          {log.map((l, i) => <Muted key={i}>• {l}</Muted>)}
+        <Card>
+          <Text style={{ fontWeight: '700', color: colors.text }}>2. Что перемещаем — можно несколько товаров</Text>
+          <Button title="Сканировать товары" icon="⌗" onPress={() => setScanMode('items')} />
+          {rows.length ? (
+            <Button title={`Выбрать из «${sourceLabel}» (${rows.length})`} variant="secondary"
+              onPress={() => setPickStock({ title: sourceLabel, rows })} />
+          ) : null}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 }}>
+            <Text style={{ color: colors.text, flex: 1 }}>Быстрый режим: 1 скан = 1 шт</Text>
+            <Switch value={quick} onValueChange={setQuick} />
+          </View>
+          <Muted>В режиме сканирования QR ячейки или короба меняет «откуда» — позиции из разных мест копятся в одном перемещении.</Muted>
+        </Card>
+
+        <Section title={`К перемещению · ${cart.length} поз. · ${formatQty(total)} ед.`}
+          action={cart.length ? (
+            <Pressable onPress={() => confirm('Очистить список?', '', () => setCart([]), 'Очистить')} hitSlop={8}>
+              <Text style={{ color: colors.danger }}>Очистить</Text>
+            </Pressable>
+          ) : undefined}>
+          <View style={{ borderRadius: 12, overflow: 'hidden' }}>
+            {cart.length ? cart.map((c, i) => (
+              <Pressable key={c.key} onPress={() => lineActions(c)}
+                style={({ pressed }) => [s.row, pressed && { opacity: 0.8 }]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.rowTitle}>{i + 1}. {c.row.item_name}</Text>
+                  <Text style={s.rowSub}>{c.row.sku} · ← {placeText(c.row)} · приёмка {c.row.received_at}</Text>
+                </View>
+                {c.qty === c.row.qty ? <Badge text="всё" tone="primary" /> : null}
+                <Text style={[s.rowRight, { marginLeft: 8 }]}>{formatQty(c.qty)} {c.row.unit}</Text>
+              </Pressable>
+            )) : <Empty text="Пусто — отсканируйте товары или выберите из списка" />}
+          </View>
         </Section>
-      ) : null}
-      <Button title="Документы перемещения" variant="ghost" onPress={() => router.push({ pathname: '/documents', params: { filter: 'move' } })} />
 
-      <Scanner visible={scan} onClose={() => setScan(false)} title={step === 'target' ? 'Куда' : 'Откуда'}
-        hint={step === 'target' ? 'QR ячейки или короба назначения' : 'QR ячейки / короба или ШК товара'}
-        onScan={step === 'target' ? onTarget : onSource} />
-      <StockPicker visible={pickRow} title={sourceLabel} rows={rows} onClose={() => setPickRow(false)}
-        onPick={(r) => { setPickRow(false); chooseRow(r); }} />
-      <Scanner visible={itemScan} onClose={() => setItemScan(false)} title="Что перемещаем"
-        hint={`ШК / QR товара (или QR короба) из «${sourceLabel}»`} onScan={onItemScan} />
-      <StockPicker visible={pickRows !== null} title="Уточните партию / короб" rows={pickRows ?? []} onClose={() => setPickRows(null)}
-        onPick={(r) => { setPickRows(null); chooseRow(r); }} />
-      <StockPicker visible={pickSource} title="Что перемещаем?" onClose={() => setPickSource(false)}
-        onPick={(r) => { setPickSource(false); setSourceLabel(r.address ?? ''); setRows([r]); chooseRow(r); }} />
-      <QtyPrompt visible={askQty} title={row ? `${row.item_name}: сколько переместить?` : ''} unit={row?.unit} max={row?.qty}
-        initial={row?.qty} onClose={() => setAskQty(false)} onSubmit={(q) => { setQty(q); setAskQty(false); }} />
+        {log.length ? (
+          <Section title="Перемещено за сессию">
+            {log.map((l, i) => <Muted key={i}>• {l}</Muted>)}
+          </Section>
+        ) : null}
+        <Button title="Документы перемещения" variant="ghost" onPress={() => router.push({ pathname: '/documents', params: { filter: 'move' } })} />
+      </ScrollView>
+
+      {cart.length ? (
+        <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: 12, paddingBottom: 28,
+          backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.border }}>
+          <Text style={{ fontWeight: '700', color: colors.text, marginBottom: 4 }}>3. Куда переместить {cart.length} поз.</Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Button title="Сканировать место" icon="⌗" variant="success" style={{ flex: 1 }} busy={busy} onPress={() => setScanMode('target')} />
+            <Button title="Выбрать" variant="ghost" style={{ flex: 1 }} disabled={busy} onPress={() => setPickTarget(true)} />
+          </View>
+        </View>
+      ) : null}
+
+      <Scanner visible={scanMode !== null} onClose={() => setScanMode(null)}
+        title={scanMode === 'target' ? 'Куда' : `Набор: ${cart.length} поз.`}
+        hint={scanMode === 'target' ? 'QR ячейки или короба назначения'
+          : `${sourceLabel ? `Откуда: ${sourceLabel}. ` : ''}ШК / QR товара — ${quick ? '+1 шт' : 'с количеством'}; QR ячейки / короба — сменить «откуда»`}
+        onScan={scanMode === 'target' ? onTargetScan : onItemsScan} />
+      <StockPicker visible={pickStock !== null} title={pickStock?.title} rows={pickStock?.rows} onClose={() => setPickStock(null)}
+        onPick={(r) => {
+          setPickStock(null);
+          if (freeOf(r) <= 0) return notify('Уже в списке', `${r.item_name}: набрано всё (${formatQty(r.qty)} ${r.unit})`);
+          askQty(r, freeOf(r));
+        }} />
+      <QtyPrompt visible={qtyReq !== null}
+        title={qtyReq ? `${qtyReq.row.item_name}\n← ${placeText(qtyReq.row)}\nсколько переместить?` : ''}
+        unit={qtyReq?.row.unit}
+        max={qtyReq ? (qtyReq.replace ? qtyReq.row.qty : freeOf(qtyReq.row)) : undefined}
+        initial={qtyReq?.initial}
+        onClose={() => setQtyReq(null)}
+        onSubmit={(q) => {
+          const req = qtyReq;
+          setQtyReq(null);
+          if (req) addToCart(req.row, q, req.replace);
+        }} />
       <PlacePicker visible={pickSourceCell} cellOnly title="Откуда: выберите ячейку" onClose={() => setPickSourceCell(false)}
         onPick={async (p: PickedPlace) => {
           setPickSourceCell(false);
           try {
-            const list = p.kind === 'box' ? await api.stockInBox(p.boxId) : await api.stockAllInCell(p.cellId);
-            setSourceLabel(p.label);
-            setRows(list);
-            setStep('item');
-            if (list.length === 1) chooseRow(list[0]);
+            const loader = p.kind === 'box' ? () => api.stockInBox(p.boxId) : () => api.stockAllInCell(p.cellId);
+            const list = await loader();
+            setSource(p.label, list, loader);
+            if (!list.length) notify('Пусто', p.label);
           } catch (e) {
             showError(e);
           }
@@ -219,6 +272,8 @@ export default function MoveScreen() {
           setPickTarget(false);
           doMove(p.kind === 'box' ? { boxId: p.boxId } : { cellId: p.cellId }, p.label);
         }} />
-    </ScrollView>
+      <ActionMenu visible={menu !== null} title={menu?.title} subtitle={menu?.subtitle} actions={menu?.actions ?? []}
+        onClose={() => setMenu(null)} />
+    </View>
   );
 }

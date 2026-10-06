@@ -412,3 +412,29 @@ test('код ячейки, набранный вручную, распознаё
   assert.equal((await K.resolveScan(cell.code)).type, 'none');
   assert.equal((await K.resolveScan(`B-${cell.code}`)).type, 'cell');
 });
+
+test('перемещение нескольких товаров из разных мест одним документом; ошибка — ничего не перемещается', async () => {
+  await receive('keeper', [{ itemId: gloves, qty: 10, cellId: cellA }, { itemId: shovel, qty: 3, cellId: buffer }]);
+  const K = as('keeper');
+  const lot = (await K.stockLooseInCell(cellA))[0].received_at;
+  const doc = await K.moveMany({
+    to: { cellId: cellB },
+    lines: [
+      { itemId: gloves, from: { cellId: cellA }, qty: 4, receivedAt: lot },
+      { itemId: shovel, from: { cellId: buffer }, qty: 3 },
+    ],
+  });
+  const lines = await K.listLines(doc);
+  assert.deepEqual(lines.map((l) => [l.sku, l.qty]).sort(), [['GLOVES', 4], ['SHOVEL', 3]]);
+  assert.equal((await K.listDocuments({ type: 'move' })).length, 1);
+  assert.deepEqual((await K.stockLooseInCell(cellB)).map((x) => [x.sku, x.qty]).sort(), [['GLOVES', 4], ['SHOVEL', 3]]);
+  assert.equal((await K.stockLooseInCell(buffer)).length, 0);
+
+  // во второй строке больше, чем есть — откатывается всё
+  await assert.rejects(K.moveMany({
+    to: { cellId: cellA },
+    lines: [{ itemId: shovel, from: { cellId: cellB }, qty: 1 }, { itemId: gloves, from: { cellId: cellB }, qty: 99 }],
+  }));
+  assert.deepEqual((await K.stockLooseInCell(cellB)).map((x) => [x.sku, x.qty]).sort(), [['GLOVES', 4], ['SHOVEL', 3]]);
+  await assert.rejects(K.moveMany({ to: { cellId: cellB }, lines: [{ itemId: gloves, from: { cellId: cellB }, qty: 1 }] }), /месте назначения/);
+});

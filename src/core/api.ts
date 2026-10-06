@@ -90,6 +90,7 @@ export const api = {
   postIssue: documents.postIssue,
   unpostDocument: documents.unpost,
   moveStock: documents.moveStock,
+  moveMany: documents.moveMany,
 
   // выдача под ответственность
   myCustody: custody.mine,

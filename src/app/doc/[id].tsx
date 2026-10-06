@@ -472,7 +472,7 @@ export default function DocumentScreen() {
               <Muted>№ {doc.number} от {doc.doc_date.slice(0, 16)}{subtitle ? ` · ${subtitle}` : ''}</Muted>
               <Muted>Составил: {doc.created_by_name}</Muted>
               {doc.assignee_name ? <Text style={{ color: colors.text, fontWeight: '600', marginTop: 2 }}>
-                {isIssue ? 'Отбирает' : 'Принимает'}: {doc.assignee_name}{doc.assignee_id === user.id ? ' (вы)' : ''}
+                {isIssue ? 'Отбирает' : isReceipt ? 'Принимает' : 'Выполнил'}: {doc.assignee_name}{doc.assignee_id === user.id ? ' (вы)' : ''}
               </Text> : null}
               {doc.posted_at ? <Muted>Провёл: {doc.posted_by_name}, {doc.posted_at}{modeLabel ? ` · ${modeLabel}` : ''}</Muted> : null}
               {doc.warehouse_name ? <Muted>Склад: {doc.warehouse_name}</Muted> : null}

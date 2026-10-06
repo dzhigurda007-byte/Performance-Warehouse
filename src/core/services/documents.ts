@@ -572,30 +572,45 @@ export const documents = {
    * по одному ШК. Партии (дата приёмки) сохраняются. Документ «ПМ» проводится сразу.
    */
   async moveStock(ctx: Ctx, m: { itemId: number; from: Place; to: Place; qty: number; receivedAt?: string | null }) {
+    return documents.moveMany(ctx, { to: m.to, lines: [{ itemId: m.itemId, from: m.from, qty: m.qty, receivedAt: m.receivedAt }] });
+  },
+
+  /**
+   * Перемещение нескольких позиций (разные товары, разные места «откуда») в одно место —
+   * одним документом. Всё или ничего: при ошибке в любой строке ничего не перемещается.
+   */
+  async moveMany(ctx: Ctx, m: { to: Place; lines: { itemId: number; from: Place; qty: number; receivedAt?: string | null }[]; comment?: string }) {
     need(ctx, can.operate, 'перемещение');
-    if (!(m.qty > 0)) throw new BusinessError('Количество должно быть больше нуля');
-    const db = ctx.db;
-    const fromKey = placeKey(m.from.cellId ?? null, m.from.boxId ?? null);
+    if (!m.lines.length) throw new BusinessError('Нечего перемещать');
     const toKey = placeKey(m.to.cellId ?? null, m.to.boxId ?? null);
-    if (fromKey === toKey) throw new BusinessError('Место назначения совпадает с исходным');
-    const n = await nextSeq(db, 'seq_move');
+    for (const l of m.lines) {
+      if (!(l.qty > 0)) throw new BusinessError('Количество должно быть больше нуля');
+      if (placeKey(l.from.cellId ?? null, l.from.boxId ?? null) === toKey) {
+        const it = await ctx.db.getFirstAsync<{ name: string }>('SELECT name FROM items WHERE id = ?', l.itemId);
+        throw new BusinessError(`«${it?.name ?? ''}» уже лежит в месте назначения`);
+      }
+    }
+    const db = ctx.db;
     let docId = 0;
     await inTransaction(db, async (t) => {
-      docId = (await t.runAsync(`INSERT INTO documents(type, mode, number, status, created_by, posted_by, posted_at)
-        VALUES('move', 'fact', ?, 'posted', ?, ?, datetime('now','localtime'))`,
-      formatDocNumber('move', n), ctx.user.id, ctx.user.id)).lastInsertRowId;
-      const fromCell = await cellOfPlace(t, m.from.cellId ?? null, m.from.boxId ?? null);
+      const n = await nextSeq(t, 'seq_move');
+      docId = (await t.runAsync(`INSERT INTO documents(type, mode, number, status, created_by, posted_by, posted_at, comment, assignee_id)
+        VALUES('move', 'fact', ?, 'posted', ?, ?, datetime('now','localtime'), ?, ?)`,
+      formatDocNumber('move', n), ctx.user.id, ctx.user.id, emptyToNull(m.comment), ctx.user.id)).lastInsertRowId;
       const toCell = await cellOfPlace(t, m.to.cellId ?? null, m.to.boxId ?? null);
-      const lots = await changeStock(t, m.itemId, m.from, -m.qty, m.receivedAt);
-      for (const lot of lots) {
-        await changeStock(t, m.itemId, m.to, lot.qty, lot.received_at);
-        await t.runAsync(`INSERT INTO doc_lines(doc_id, item_id, qty, cell_id, box_id, to_cell_id, to_box_id, received_at)
-          VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, docId, m.itemId, lot.qty, m.from.boxId ? null : m.from.cellId ?? null,
-        m.from.boxId ?? null, toCell, m.to.boxId ?? null, lot.received_at);
-        await writeMove(t, { docId, itemId: m.itemId, boxId: m.from.boxId ?? null, cellId: fromCell, qty: -lot.qty,
-          userId: ctx.user.id, kind: 'move', receivedAt: lot.received_at });
-        await writeMove(t, { docId, itemId: m.itemId, boxId: m.to.boxId ?? null, cellId: toCell, qty: lot.qty,
-          userId: ctx.user.id, kind: 'move', receivedAt: lot.received_at });
+      for (const l of m.lines) {
+        const fromCell = await cellOfPlace(t, l.from.cellId ?? null, l.from.boxId ?? null);
+        const lots = await changeStock(t, l.itemId, l.from, -l.qty, l.receivedAt);
+        for (const lot of lots) {
+          await changeStock(t, l.itemId, m.to, lot.qty, lot.received_at);
+          await t.runAsync(`INSERT INTO doc_lines(doc_id, item_id, qty, cell_id, box_id, to_cell_id, to_box_id, received_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, docId, l.itemId, lot.qty, l.from.boxId ? null : l.from.cellId ?? null,
+          l.from.boxId ?? null, toCell, m.to.boxId ?? null, lot.received_at);
+          await writeMove(t, { docId, itemId: l.itemId, boxId: l.from.boxId ?? null, cellId: fromCell, qty: -lot.qty,
+            userId: ctx.user.id, kind: 'move', receivedAt: lot.received_at });
+          await writeMove(t, { docId, itemId: l.itemId, boxId: m.to.boxId ?? null, cellId: toCell, qty: lot.qty,
+            userId: ctx.user.id, kind: 'move', receivedAt: lot.received_at });
+        }
       }
     });
     return docId;
