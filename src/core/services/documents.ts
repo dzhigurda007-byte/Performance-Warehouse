@@ -269,6 +269,7 @@ export const documents = {
         const row = rows[i];
         const qty = Number(row.qty ?? 0);
         if (!(qty > 0)) { errors.push(`Строка ${i + 2}: не указано количество`); continue; }
+        if (!row.sku?.toString().trim() && !row.barcode?.toString().trim()) { errors.push(`Строка ${i + 2}: не указан артикул`); continue; }
         try {
           await items.upsertForReceipt(t, row);
           const item = await findItemByCode(t, (row.sku || row.barcode || '').toString());

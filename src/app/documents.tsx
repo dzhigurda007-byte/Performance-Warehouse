@@ -2,9 +2,9 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { FlatList, View } from 'react-native';
 import { Chips } from '../components/Chips';
-import { Badge, Empty, ListRow, s, useFocusLoad } from '../components/ui';
+import { Badge, Button, Empty, ListRow, s, useFocusLoad } from '../components/ui';
 import type { DocumentRow } from '../core/types';
-import { useApi } from '../lib/backend';
+import { useApi, usePerms } from '../lib/backend';
 import { DOC_SOURCE_LABEL, DOC_TITLES, docSubtitle } from '../lib/docs';
 
 type Filter = 'all' | 'drafts' | 'receipt' | 'issue' | 'returns' | 'move';
@@ -27,12 +27,17 @@ function statusBadge(d: DocumentRow) {
 
 export default function DocsScreen() {
   const api = useApi();
+  const p = usePerms();
   const initial = (useLocalSearchParams<{ filter?: Filter }>().filter ?? 'all') as Filter;
   const [filter, setFilter] = useState<Filter>(initial in QUERY ? initial : 'all');
   const [docs] = useFocusLoad(() => api.listDocuments(QUERY[filter]), [api, filter]);
 
   return (
     <View style={[s.screen, { padding: 16 }]}>
+      {p.operate ? (
+        <Button title="Приходный ордер из Excel (Артикул · Наименование · Количество)" icon="⊞" variant="secondary"
+          onPress={() => router.push({ pathname: '/import', params: { kind: 'receipt' } })} />
+      ) : null}
       <Chips value={filter} onChange={setFilter} options={[
         { value: 'all' as Filter, label: 'Все' },
         { value: 'drafts' as Filter, label: 'Черновики' },

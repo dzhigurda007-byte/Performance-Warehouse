@@ -11,7 +11,7 @@ import { pickExcel } from '../lib/excel';
 /**
  * Загрузка из Excel:
  *  kind=items   — номенклатура (справочник): Артикул, Название, ШК [, Группа];
- *  kind=receipt — приходный ордер: + Количество; после проведения товар в буферной ячейке.
+ *  kind=receipt — приходный ордер: Артикул, Наименование, Количество; после проведения товар в буферной ячейке.
  */
 export default function ImportScreen() {
   const api = useApi();
@@ -27,7 +27,7 @@ export default function ImportScreen() {
 
   async function choose() {
     try {
-      const f = await pickExcel();
+      const f = await pickExcel(kind);
       if (f) setFile(f);
     } catch (e) {
       showError(e);
@@ -64,12 +64,13 @@ export default function ImportScreen() {
         </Text>
         <Muted>Формат: первая строка — заголовки столбцов.</Muted>
         <Text style={{ fontFamily: 'monospace', color: colors.text, marginVertical: 8 }}>
-          {kind === 'items' ? 'артикул | Название | ШК | Группа (необяз.)' : 'артикул | Название | ШК | Количество'}
+          {kind === 'items' ? 'Артикул | Название | ШК | Группа (необяз.)' : 'Артикул | Наименование | Количество'}
         </Text>
         <Muted>
           {kind === 'items'
             ? 'Номенклатура — это справочник возможных наименований (как в 1С), а не товар на складе. Существующие артикулы обновятся.'
-            : 'Неизвестные товары будут добавлены в номенклатуру. После проведения товар окажется в буферной ячейке склада — разложите его перемещением.'}
+            : 'Три столбца, как в номенклатуре, только вместо штрихкода — количество. Товар ищется по артикулу; новые артикулы будут добавлены в номенклатуру. ' +
+              'Создаётся черновик приходного ордера: проверьте его и проведите — товар окажется в буферной ячейке склада, затем разложите его перемещением.'}
         </Muted>
         <Button title={file ? `Файл: ${file.name}` : 'Выбрать файл .xlsx'} variant="secondary" icon="⊞" onPress={choose} />
       </Card>
@@ -85,7 +86,7 @@ export default function ImportScreen() {
         <Section title={`Строк: ${file.rows.length}`}>
           <View style={{ borderRadius: 12, overflow: 'hidden' }}>
             {file.rows.slice(0, 30).map((r, i) => (
-              <ListRow key={i} title={r.name || '(без названия)'} subtitle={`${r.sku || '—'} · ШК ${r.barcode || '—'}${r.group ? ' · ' + r.group : ''}`}
+              <ListRow key={i} title={r.name || '(без названия)'} subtitle={kind === 'receipt' ? `Артикул ${r.sku || '—'}` : `${r.sku || '—'} · ШК ${r.barcode || '—'}${r.group ? ' · ' + r.group : ''}`}
                 right={kind === 'receipt' ? formatQty(r.qty ?? 0) : undefined} />
             ))}
           </View>

@@ -100,6 +100,19 @@ test('импорт номенклатуры из Excel и приход из Exce
   await K.postReceipt(r.docId);
   const buf = await K.stockLooseInCell(buffer);
   assert.deepEqual(buf.map((s) => [s.sku, s.qty]).sort(), [['HAMMER', 4], ['NEW-1', 2]]);
+
+  // формат прихода из трёх столбцов: Артикул · Наименование · Количество (без ШК)
+  const r3 = await K.createReceiptFromRows(whId, [
+    { sku: 'hammer', name: 'Молоток', qty: 1 },
+    { sku: 'GLOVES', name: 'Перчатки', qty: 10 },
+    { sku: '', name: 'Без артикула', qty: 1 },
+  ]);
+  assert.deepEqual(r3.errors, ['Строка 4: не указан артикул']);
+  assert.equal((await K.listLines(r3.docId)).length, 2);
+  await K.postReceipt(r3.docId);
+  const buf2 = await K.stockLooseInCell(buffer);
+  const total = (sku: string) => buf2.filter((s) => s.sku === sku).reduce((a, s) => a + s.qty, 0);
+  assert.deepEqual([total('HAMMER'), total('GLOVES')], [5, 10]);
 });
 
 test('расходный ордер «Списать»: товар уходит из базы, в истории — кто и откуда', async () => {

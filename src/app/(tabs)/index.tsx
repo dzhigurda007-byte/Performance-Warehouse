@@ -77,7 +77,7 @@ export default function HomeScreen() {
           <Tile icon="↓" title="Приходный ордер" tone={colors.success}
             subtitle="Сканировать ШК на ТСД / телефоне, несколько штук по одному ШК" onPress={() => newDoc('receipt', 'fact')} />
           <Tile icon="⊞" title="Приход из Excel" tone={colors.success}
-            subtitle="Файл: Артикул, Название, ШК, Количество → в буферную ячейку" onPress={() => router.push({ pathname: '/import', params: { kind: 'receipt' } })} />
+            subtitle="Файл: Артикул, Наименование, Количество → в буферную ячейку" onPress={() => router.push({ pathname: '/import', params: { kind: 'receipt' } })} />
         </Section>
       ) : null}
 
