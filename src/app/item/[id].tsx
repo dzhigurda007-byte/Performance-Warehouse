@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
-import { useApi } from '../../lib/backend';
+import { useApi, usePerms } from '../../lib/backend';
 import { ScrollView, View } from 'react-native';
 import { QrView } from '../../components/QrView';
 import { Badge, Button, Card, Empty, H1, ListRow, Muted, Section, confirm, s, showError, useFocusLoad } from '../../components/ui';
@@ -9,6 +9,7 @@ import { PrintMenu, type PrintJob } from '../../components/PrintMenu';
 
 export default function ItemScreen() {
   const api = useApi();
+  const perms = usePerms();
   const id = Number(useLocalSearchParams<{ id: string }>().id);
   const [printJob, setPrintJob] = useState<PrintJob | null>(null);
   const [data] = useFocusLoad(async () => ({
@@ -29,12 +30,14 @@ export default function ItemScreen() {
         {item.description ? <Muted>{item.description}</Muted> : null}
         <QrView value={itemQr(item.sku)} caption={item.sku} size={130} />
         <View style={s.rowWrap}>
-          <Button title="Изменить" variant="ghost" style={{ flex: 1 }}
-            onPress={() => router.push({ pathname: '/item/edit', params: { id: String(id) } })} />
+          {perms.manageItems ? (
+            <Button title="Изменить" variant="ghost" style={{ flex: 1 }}
+              onPress={() => router.push({ pathname: '/item/edit', params: { id: String(id) } })} />
+          ) : null}
           <Button title="Этикетка" icon="⎙" variant="secondary" style={{ flex: 1 }}
             onPress={() => setPrintJob({ title: 'Печать этикеток', variants: [{ label: 'Товар', labels: () => [{ qr: itemQr(item.sku), title: item.sku, subtitle: item.name }] }] })} />
         </View>
-        {!history.length && !stock.length ? (
+        {perms.manageItems && !history.length && !stock.length ? (
           <Button title="Удалить товар" variant="danger" onPress={() => confirm('Удалить товар?', item.name, async () => {
             try {
               await api.deleteItem(id);

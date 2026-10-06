@@ -88,7 +88,9 @@ test('перемещение части количества по одному �
 
 test('импорт номенклатуры из Excel и приход из Excel в буфер', async () => {
   const K = as('keeper');
-  const res = await K.importItems([
+  const B = as('boss'); // номенклатуру ведёт руководитель
+  await assert.rejects(K.importItems([{ sku: 'X1', name: 'X' }]), /номенклатура/);
+  const res = await B.importItems([
     { sku: 'HAMMER', name: 'Молоток', barcode: '111', group: 'Инструмент / Ручной' },
     { sku: 'SHOVEL', name: 'Лопата штыковая', barcode: null },
     { sku: '', name: 'Без артикула', barcode: '' },
@@ -97,10 +99,14 @@ test('импорт номенклатуры из Excel и приход из Exce
   const groups = await K.listGroups();
   const top = groups.find((g) => g.name === 'Инструмент')!;
   assert.equal((await K.listItems('', top.id)).length, 1); // подгруппы учитываются
-  const r = await K.createReceiptFromRows(whId, [{ sku: 'HAMMER', qty: 4 }, { sku: 'NEW-1', name: 'Новый', barcode: '222', qty: 2 }, { sku: 'X', qty: 0 }]);
+  // кладовщик не заводит новые товары: строка с неизвестным артикулом — ошибка
+  const rk = await K.createReceiptFromRows(whId, [{ sku: 'HAMMER', qty: 1 }, { sku: 'NEW-1', name: 'Новый', qty: 1 }]);
+  assert.deepEqual(rk.errors, ['Строка 3: артикула NEW-1 нет в номенклатуре']);
+  await K.deleteDocument(rk.docId);
+  const r = await B.createReceiptFromRows(whId, [{ sku: 'HAMMER', qty: 4 }, { sku: 'NEW-1', name: 'Новый', barcode: '222', qty: 2 }, { sku: 'X', qty: 0 }]);
   assert.equal(r.errors.length, 1);
   // из Excel создаётся задание на приёмку: план есть, принятого пока нет
-  assert.equal((await K.receiptPlan(r.docId)).length, 2);
+  assert.equal((await K.docPlan(r.docId)).length, 2);
   await assert.rejects(K.postReceipt(r.docId), /Ничего не принято/);
   await K.fillFromPlan(r.docId); // ПК: принять всё по заданию
   await K.postReceipt(r.docId);
@@ -108,13 +114,13 @@ test('импорт номенклатуры из Excel и приход из Exce
   assert.deepEqual(buf.map((s) => [s.sku, s.qty]).sort(), [['HAMMER', 4], ['NEW-1', 2]]);
 
   // формат прихода из трёх столбцов: Артикул · Наименование · Количество (без ШК)
-  const r3 = await K.createReceiptFromRows(whId, [
+  const r3 = await B.createReceiptFromRows(whId, [
     { sku: 'hammer', name: 'Молоток', qty: 1 },
     { sku: 'GLOVES', name: 'Перчатки', qty: 10 },
     { sku: '', name: 'Без артикула', qty: 1 },
   ]);
   assert.deepEqual(r3.errors, ['Строка 4: не указан артикул']);
-  assert.equal((await K.receiptPlan(r3.docId)).length, 2);
+  assert.equal((await K.docPlan(r3.docId)).length, 2);
   await K.fillFromPlan(r3.docId);
   await K.postReceipt(r3.docId);
   const buf2 = await K.stockLooseInCell(buffer);
@@ -252,7 +258,7 @@ test('иерархия: руководитель видит подчинённы
 
 test('отчёт «Остатки»: группы и подгруппы, отбор по дате приёмки и количеству, права', async () => {
   const K = as('keeper');
-  await K.importItems([
+  await as('boss').importItems([
     { sku: 'KOMB', name: 'Кухонный комбайн', group: 'Техника / Бытовая / Кухонные комбайны' },
     { sku: 'DRILL', name: 'Дрель', group: 'Техника / Строительная' },
   ]);
@@ -290,13 +296,13 @@ test('задание на приёмку: сканирование по ШК, с
   const doc = await K.createDocument('receipt', 'plan', { warehouseId: whId });
   await K.setPlanQty(doc, shovel, 3);
   await K.setPlanQty(doc, gloves, 10);
-  const hammer = await K.saveItem({ sku: 'HAMMER', name: 'Молоток', barcode: '4600000000035' });
+  const hammer = await as('boss').saveItem({ sku: 'HAMMER', name: 'Молоток', barcode: '4600000000035' });
 
   // быстрый режим: 1 скан = +1 шт; ШК перчаток — коробка по 1 шт, количеством 4
   for (let i = 0; i < 3; i++) await K.addLineByCode(doc, '4600000000011', 1);
   await K.addLineByCode(doc, '4600000000028', 4);
   await K.addLineByCode(doc, '4600000000035', 1); // нет в задании
-  let chk = receiptCheck(await K.receiptPlan(doc), await K.listLines(doc));
+  let chk = receiptCheck(await K.docPlan(doc), await K.listLines(doc));
   const st = () => Object.fromEntries(chk.rows.map((x) => [x.sku, `${x.status}:${x.fact}/${x.plan}`]));
   assert.deepEqual(st(), { SHOVEL: 'ok:3/3', GLOVES: 'short:4/10', HAMMER: 'extra:1/0' });
   assert.equal(chk.matched, false);
@@ -304,7 +310,7 @@ test('задание на приёмку: сканирование по ШК, с
   await K.addLineByCode(doc, '4600000000011', 1); // лишняя лопата
   await K.setFactQty(doc, gloves, 10);
   await K.setFactQty(doc, hammer, 0);
-  chk = receiptCheck(await K.receiptPlan(doc), await K.listLines(doc));
+  chk = receiptCheck(await K.docPlan(doc), await K.listLines(doc));
   assert.deepEqual(st(), { SHOVEL: 'over:4/3', GLOVES: 'ok:10/10' });
 
   // строки без места — после проведения всё в буферной ячейке
@@ -314,4 +320,48 @@ test('задание на приёмку: сканирование по ШК, с
   assert.deepEqual(buf.map((x) => [x.sku, x.qty]).sort(), [['GLOVES', 10], ['SHOVEL', 4]]);
   await assert.rejects(K.setPlanQty(doc, shovel, 1), /проведён/);
   await assert.rejects(as('emp').setPlanQty(await K.createDocument('receipt', 'plan', { warehouseId: whId }), shovel, 1), /прав|доступ|запрещ/i);
+});
+
+test('задания: общий пул, кладовщик берёт задание — его ФИО в ордере; задание на отбор со сверкой', async () => {
+  await receive('keeper', [{ itemId: gloves, qty: 6, cellId: cellA }, { itemId: gloves, qty: 10, cellId: cellB }, { itemId: shovel, qty: 2, cellId: cellA }]);
+  const B = as('boss');
+  const K = as('keeper');
+  const K2 = as('keeper2');
+
+  const task = await B.createDocument('issue', 'plan');
+  await B.setPlanQty(task, gloves, 8);
+  await B.setPlanQty(task, shovel, 3);
+  let pool = await K.listDocuments({ status: 'draft', task: true });
+  assert.deepEqual(pool.map((d) => [d.id, d.assignee_id, d.plan_qty, d.lines_qty]), [[task, null, 11, 0]]);
+
+  await K.takeTask(task);
+  await assert.rejects(K2.takeTask(task), /в работе у keeper ФИО/);
+  pool = await K2.listDocuments({ status: 'draft', task: true });
+  assert.equal(pool[0].assignee_name, 'keeper ФИО');
+
+  // отбор по факту: 6 из ячейки A + 3 из B, лопат на складе только 2
+  await K.addLine(task, { itemId: gloves, qty: 6, cellId: cellA });
+  await K.addLine(task, { itemId: gloves, qty: 3, cellId: cellB });
+  await K.addLine(task, { itemId: shovel, qty: 2, cellId: cellA });
+  let chk = receiptCheck(await K.docPlan(task), await K.listLines(task));
+  assert.deepEqual(chk.rows.map((x) => [x.sku, x.status]), [['GLOVES', 'over'], ['SHOVEL', 'short']]);
+  await K.setFactQty(task, gloves, 0); // сбросить отобранное
+  await assert.rejects(K.setFactQty(task, gloves, 5), /конкретного места/);
+  const res = await K.fillFromPlan(task); // ПК: подобрать по FIFO
+  assert.equal(res.shortage, 1);
+  chk = receiptCheck(await K.docPlan(task), await K.listLines(task));
+  assert.deepEqual(chk.rows.map((x) => [x.sku, x.fact, x.status]), [['GLOVES', 8, 'ok'], ['SHOVEL', 2, 'short']]);
+
+  await K.postIssue(task, 'writeoff');
+  const posted = await K.getDocument(task);
+  assert.equal(posted.assignee_name, 'keeper ФИО');
+  assert.equal((await K.listDocuments({ status: 'draft', task: true })).length, 0);
+
+  // задание никто не брал — исполнителем становится проводящий
+  const rt = await B.createDocument('receipt', 'plan', { warehouseId: whId });
+  await B.setPlanQty(rt, gloves, 1);
+  await K2.addLine(rt, { itemId: gloves, qty: 1 });
+  await K2.postReceipt(rt);
+  assert.equal((await K2.getDocument(rt)).assignee_name, 'keeper2 ФИО');
+  await assert.rejects(as('keeper').saveItem({ sku: 'NEWX', name: 'Новый' }), /номенклатура/);
 });

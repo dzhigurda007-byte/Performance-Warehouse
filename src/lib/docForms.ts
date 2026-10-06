@@ -154,7 +154,7 @@ export function receiptForm(doc: DocumentRow, lines: DocLine[], ctx: FormContext
       <tr><th>наименование</th><th style="width:26mm">артикул</th><th style="width:17mm">по документу</th><th style="width:17mm">принято</th></tr>
     </thead><tbody>${rows}</tbody>
     <tfoot><tr><td colspan="4">Итого: ${lines.length} поз.</td><td class="num">${q(totalQty(lines))} ${esc(unitsNote(lines))}</td><td class="num">${doc.status === 'posted' ? `${q(totalQty(lines.filter((l) => !isReturn || l.accept)))} ${esc(unitsNote(lines))}` : ''}</td><td${isReturn ? ' colspan="2"' : ''}></td></tr></tfoot></table>
-    <div class="signs">${sign('Принял (кладовщик)', doc.posted_by_name)}${sign(isReturn ? 'Сдал (сотрудник)' : 'Сдал (поставщик / экспедитор)')}</div>
+    <div class="signs">${sign('Принял (кладовщик)', doc.assignee_name ?? doc.posted_by_name)}${sign(isReturn ? 'Сдал (сотрудник)' : 'Сдал (поставщик / экспедитор)')}</div>
     ${footer(ctx, `${title} № ${doc.number}`)}`;
   return { fileName: `${title} ${doc.number}`, html: page(`${title} № ${doc.number}`, body) };
 }
@@ -179,7 +179,7 @@ function receiptTaskForm(doc: DocumentRow, lines: DocLine[], plan: PlanRow[], ct
     <div class="sub">по заданию на приёмку · товар размещён в буферной ячейке склада</div>
     <table class="head"><tr><th>Дата составления</th><th>Вид операции</th><th>Склад</th><th>Поставщик</th></tr>
       <tr><td>${esc(docDate(doc))}</td><td>Поступление по заданию</td><td>${esc(doc.warehouse_name ?? '—')}</td><td>${esc(doc.partner ?? '—')}</td></tr></table>
-    ${metaRows([['Составил', doc.created_by_name], ['Статус', statusText(doc)],
+    ${metaRows([['Составил', doc.created_by_name], ['Принимает (кладовщик)', doc.assignee_name], ['Статус', statusText(doc)],
       ['Итог сверки', `сошлось ${chk.ok}, недостача ${chk.short}, излишек ${chk.over}, нет в задании ${chk.extra}`], ['Комментарий', doc.comment]])}
     <table class="grid"><thead>
       <tr><th rowspan="2" style="width:7mm">№</th><th colspan="2">Материальные ценности</th><th rowspan="2" style="width:12mm">Ед. изм.</th>
@@ -188,7 +188,7 @@ function receiptTaskForm(doc: DocumentRow, lines: DocLine[], plan: PlanRow[], ct
     </thead><tbody>${rows}</tbody>
     <tfoot><tr><td colspan="4">Итого: ${chk.rows.length} поз.</td><td class="num">${q(chk.plan)}</td><td class="num">${q(chk.fact)}</td>
       <td class="num">${chk.fact !== chk.plan ? (chk.fact > chk.plan ? '+' : '') + q(chk.fact - chk.plan) : ''}</td><td></td></tr></tfoot></table>
-    <div class="signs">${sign('Принял (кладовщик)', doc.posted_by_name)}${sign('Сдал (поставщик / экспедитор)')}</div>
+    <div class="signs">${sign('Принял (кладовщик)', doc.assignee_name ?? doc.posted_by_name)}${sign('Сдал (поставщик / экспедитор)')}</div>
     ${footer(ctx, `${title} № ${doc.number}`)}`;
   return { fileName: `${title} ${doc.number}`, html: page(`${title} № ${doc.number}`, body) };
 }
@@ -197,9 +197,9 @@ function receiptTaskForm(doc: DocumentRow, lines: DocLine[], plan: PlanRow[], ct
 
 export function issueForm(
   doc: DocumentRow, lines: DocLine[], ctx: FormContext = {},
-  extra: { allocations?: AllocationLine[]; custody?: CustodyRow[] } = {},
+  extra: { allocations?: AllocationLine[]; custody?: CustodyRow[]; plan?: PlanRow[] } = {},
 ): PrintableForm {
-  const mode = doc.post_mode === 'writeoff' ? 'Отпуск со склада' : doc.post_mode === 'custody' ? 'Выдача под ответственность' : doc.status === 'draft' ? 'Заявка / лист подбора' : 'Отпуск';
+  const mode = doc.post_mode === 'writeoff' ? 'Отпуск со склада' : doc.post_mode === 'custody' ? 'Выдача под ответственность' : doc.status === 'draft' ? (extra.plan?.length ? 'Задание на отбор / лист подбора' : 'Заявка / лист подбора') : 'Отпуск';
   const title = 'Расходный ордер';
   const pick = doc.status === 'draft';
   const rows = lines.map((l, i) => `<tr>
@@ -212,6 +212,19 @@ export function issueForm(
       <td>${esc(l.address ?? '—')}${l.box_code ? `<div class="muted">короб ${esc(l.box_code)}</div>` : ''}${l.received_at ? `<div class="muted">приёмка ${esc(day(l.received_at))}</div>` : ''}</td>
       ${pick ? '<td class="c" style="font-size:12pt">☐</td>' : ''}
     </tr>`).join('');
+
+  // задание на отбор: сверка затребованного с отобранным
+  let planTable = '';
+  if (extra.plan?.length) {
+    const chk = receiptCheck(extra.plan, lines);
+    planTable = `<div class="sec">Задание на отбор: сошлось ${chk.ok}, не добрано ${chk.short}, перебор ${chk.over + chk.extra}</div>
+      <table class="grid"><thead><tr><th style="width:7mm">№</th><th>Наименование</th><th style="width:24mm">Артикул</th><th style="width:12mm">Ед.</th>
+        <th style="width:18mm">затребовано</th><th style="width:18mm">отобрано</th><th style="width:18mm">отклонение</th><th style="width:24mm">Результат</th></tr></thead><tbody>
+      ${chk.rows.map((x, i) => `<tr><td class="c">${i + 1}</td><td>${esc(x.item_name)}</td><td class="c">${esc(x.sku)}</td><td class="c">${esc(x.unit)}</td>
+        <td class="num">${x.plan ? q(x.plan) : '—'}</td><td class="num">${q(x.fact)}</td><td class="num">${x.diff ? (x.diff > 0 ? '+' : '') + q(x.diff) : ''}</td>
+        <td>${x.status === 'short' ? 'не добрано' : x.status === 'ok' ? 'сошлось' : esc(CHECK_LABEL[x.status].toLowerCase())}</td></tr>`).join('')}
+      </tbody></table>`;
+  }
 
   let recipients = '';
   if (extra.custody?.length) {
@@ -238,7 +251,9 @@ export function issueForm(
     <table class="head"><tr><th>Дата составления</th><th>Вид операции</th><th>Отправитель</th><th>Получатель</th></tr>
       <tr><td>${esc(docDate(doc))}</td><td>${esc(mode)}</td><td>Склад${doc.warehouse_name ? ` «${esc(doc.warehouse_name)}»` : ''}</td>
       <td>${esc(doc.recipient || (extra.custody?.length ? 'см. список ниже' : '—'))}</td></tr></table>
-    ${metaRows([['Основание', doc.partner], ['Затребовал', doc.created_by_name], ['Статус', statusText(doc)], ['Комментарий', doc.comment]])}
+    ${metaRows([['Основание', doc.partner], ['Затребовал', doc.created_by_name], ['Отбирает (кладовщик)', doc.assignee_name], ['Статус', statusText(doc)], ['Комментарий', doc.comment]])}
+    ${planTable}
+    ${extra.plan?.length ? '<div class="sec">Отобрано (места хранения)</div>' : ''}
     <table class="grid"><thead>
       <tr><th rowspan="2" style="width:7mm">№</th><th colspan="2">Материальные ценности</th><th rowspan="2" style="width:13mm">Ед. изм.</th>
         <th colspan="2">Количество</th><th rowspan="2" style="width:42mm">Место хранения</th>${pick ? '<th rowspan="2" style="width:8mm">✓</th>' : ''}</tr>
@@ -246,7 +261,7 @@ export function issueForm(
     </thead><tbody>${rows}</tbody>
     <tfoot><tr><td colspan="4">Итого: ${lines.length} поз.</td><td class="num">${q(totalQty(lines))} ${esc(unitsNote(lines))}</td><td class="num">${doc.status === 'posted' ? `${q(totalQty(lines))} ${esc(unitsNote(lines))}` : ''}</td><td${pick ? ' colspan="2"' : ''}></td></tr></tfoot></table>
     ${recipients}
-    <div class="signs">${sign('Отпустил (кладовщик)', doc.posted_by_name)}${sign('Получил', extra.custody?.length ? '' : doc.recipient)}
+    <div class="signs">${sign('Отпустил (кладовщик)', doc.assignee_name ?? doc.posted_by_name)}${sign('Получил', extra.custody?.length ? '' : doc.recipient)}
       ${sign('Затребовал', doc.created_by_name)}${sign('Разрешил (руководитель)')}</div>
     ${footer(ctx, `${title} № ${doc.number}`)}`;
   return { fileName: `${title} ${doc.number}`, html: page(`${title} № ${doc.number}`, body) };

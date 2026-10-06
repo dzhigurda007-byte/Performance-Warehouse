@@ -41,7 +41,7 @@ export default function HomeScreen() {
       api.listDocuments({ status: 'draft' }),
       p.custody ? api.pendingReturnReceipts() : Promise.resolve([]),
     ]);
-    const tasks = docs.filter((d) => d.type === 'receipt' && d.plan_count > 0).length;
+    const tasks = docs.filter((d) => d.plan_count > 0).length;
     return { drafts: docs.length - tasks, returns: returns.length, tasks };
   }, [api, p.operate, p.custody]);
 
@@ -75,9 +75,9 @@ export default function HomeScreen() {
 
       {p.operate ? (
         <Section title="Поступление">
-          <Tile icon="☑" title="Задания на приёмку" tone={colors.success} badge={stats?.tasks ? String(stats.tasks) : undefined}
+          <Tile icon="☑" title="Задания (приёмка и отбор)" tone={colors.success} badge={stats?.tasks ? String(stats.tasks) : undefined}
             subtitle="Сканировать ШК по заданию: красный — меньше, зелёный — сошлось, жёлтый — больше"
-            onPress={() => router.push({ pathname: '/documents', params: { filter: 'tasks' } })} />
+            onPress={() => router.push('/tasks')} />
           <Tile icon="↓" title="Приходный ордер (без задания)" tone={colors.success}
             subtitle="Сканировать ШК на ТСД / телефоне → в буферную ячейку" onPress={() => newDoc('receipt', 'fact')} />
           <Tile icon="☰" title="Новое задание на приёмку" tone={colors.success}
@@ -90,8 +90,8 @@ export default function HomeScreen() {
       <Section title="Расход и выдача">
         {p.operate ? (
           <>
-            <Tile icon="↑" title="Расходный ордер (заявка)" tone={colors.danger}
-              subtitle="Что выдать — система подберёт, откуда взять" onPress={() => newDoc('issue', 'plan')} />
+            <Tile icon="↑" title="Задание на отбор (расход)" tone={colors.danger}
+              subtitle="Что отобрать: сверка цветом и подсказка, где взять (FIFO)" onPress={() => newDoc('issue', 'plan')} />
             <Tile icon="⌗" title="Расходный ордер по факту" tone={colors.warn}
               subtitle="Сканировать короб / ячейку / товар и изымать" onPress={() => newDoc('issue', 'fact')} />
           </>

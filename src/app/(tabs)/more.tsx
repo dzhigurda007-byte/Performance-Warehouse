@@ -24,8 +24,8 @@ export default function MoreScreen() {
           <View style={{ borderRadius: 12, overflow: 'hidden' }}>
             {link('Документы', 'Приходные и расходные ордера, перемещения', '/documents')}
             {link('История движений', 'Кто, когда, что и откуда взял', '/history')}
-            {p.operate ? link('Группы номенклатуры', 'Группы и подгруппы ТМЦ', '/groups') : null}
-            {p.operate ? link('Загрузка номенклатуры из Excel', 'Артикул · Название · ШК', { pathname: '/import', params: { kind: 'items' } }) : null}
+            {p.manageItems ? link('Группы номенклатуры', 'Группы и подгруппы ТМЦ', '/groups') : null}
+            {p.manageItems ? link('Загрузка номенклатуры из Excel', 'Артикул · Название · ШК', { pathname: '/import', params: { kind: 'items' } }) : null}
           </View>
         </Section>
       ) : null}

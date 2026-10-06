@@ -29,9 +29,13 @@ const DOC_SELECT = `
   SELECT d.*, u.full_name AS created_by_name, pu.full_name AS posted_by_name, bd.number AS base_doc_number,
     wh.name AS warehouse_name,
     (SELECT COUNT(*) FROM doc_lines l WHERE l.doc_id = d.id) AS lines_count,
-    (SELECT COUNT(*) FROM receipt_plan p WHERE p.doc_id = d.id) AS plan_count
+    (SELECT COUNT(*) FROM doc_plan p WHERE p.doc_id = d.id) AS plan_count,
+    (SELECT IFNULL(SUM(qty), 0) FROM doc_plan p WHERE p.doc_id = d.id) AS plan_qty,
+    (SELECT IFNULL(SUM(qty), 0) FROM doc_lines l WHERE l.doc_id = d.id) AS lines_qty,
+    au.full_name AS assignee_name
   FROM documents d
   JOIN users u ON u.id = d.created_by
+  LEFT JOIN users au ON au.id = d.assignee_id
   LEFT JOIN users pu ON pu.id = d.posted_by
   LEFT JOIN documents bd ON bd.id = d.base_doc_id
   LEFT JOIN warehouses wh ON wh.id = d.warehouse_id`;
@@ -76,8 +80,9 @@ async function writeMove(db: DB, m: {
 }
 
 async function markPosted(db: DB, docId: number, userId: number, postMode: PostMode | null = null) {
+  // исполнитель — кто взял задание; если не брал никто, исполнителем становится проводящий
   await db.runAsync(`UPDATE documents SET status = 'posted', posted_by = ?, posted_at = datetime('now','localtime'),
-    post_mode = COALESCE(?, post_mode) WHERE id = ?`, userId, postMode, docId);
+    post_mode = COALESCE(?, post_mode), assignee_id = COALESCE(assignee_id, ?) WHERE id = ?`, userId, postMode, userId, docId);
 }
 
 export async function createReturnReceipt(db: DB, issueDocId: number): Promise<number | null> {
@@ -104,13 +109,14 @@ export async function createReturnReceipt(db: DB, issueDocId: number): Promise<n
 }
 
 export const documents = {
-  async list(ctx: Ctx, f: { type?: DocType; status?: 'draft' | 'posted'; source?: string; mode?: DocMode } = {}) {
+  async list(ctx: Ctx, f: { type?: DocType; status?: 'draft' | 'posted'; source?: string; mode?: DocMode; task?: boolean } = {}) {
     const where: string[] = [];
     const args: (string | number)[] = [];
     if (f.type) { where.push('d.type = ?'); args.push(f.type); }
     if (f.status) { where.push('d.status = ?'); args.push(f.status); }
     if (f.source) { where.push('d.source = ?'); args.push(f.source); }
     if (f.mode) { where.push('d.mode = ?'); args.push(f.mode); }
+    if (f.task) where.push('EXISTS (SELECT 1 FROM doc_plan p WHERE p.doc_id = d.id)');
     if (!can.operate(ctx.user.role)) { where.push('d.created_by = ?'); args.push(ctx.user.id); }
     return ctx.db.getAllAsync<DocumentRow>(
       `${DOC_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY d.id DESC LIMIT 500`, ...args);
@@ -275,10 +281,11 @@ export const documents = {
         if (!(qty > 0)) { errors.push(`Строка ${i + 2}: не указано количество`); continue; }
         if (!row.sku?.toString().trim() && !row.barcode?.toString().trim()) { errors.push(`Строка ${i + 2}: не указан артикул`); continue; }
         try {
-          await items.upsertForReceipt(t, row);
+          // новые товары заводит в номенклатуру только руководитель / администратор
+          if (can.manageItems(ctx.user.role)) await items.upsertForReceipt(t, row);
           const item = await findItemByCode(t, (row.sku || row.barcode || '').toString());
-          if (!item) throw new BusinessError('товар не найден');
-          await t.runAsync(`INSERT INTO receipt_plan(doc_id, item_id, qty) VALUES(?, ?, ?)
+          if (!item) throw new BusinessError(`артикула ${row.sku || row.barcode} нет в номенклатуре`);
+          await t.runAsync(`INSERT INTO doc_plan(doc_id, item_id, qty) VALUES(?, ?, ?)
             ON CONFLICT(doc_id, item_id) DO UPDATE SET qty = round(qty + excluded.qty, 3)`, docId, item.id, round3(qty));
         } catch (e) {
           errors.push(`Строка ${i + 2}: ${e instanceof Error ? e.message : String(e)}`);
@@ -294,19 +301,22 @@ export const documents = {
   plan: (ctx: Ctx, docId: number) =>
     ctx.db.getAllAsync<PlanRow>(`
       SELECT p.item_id, i.sku, i.name AS item_name, i.unit, i.barcode, p.qty
-      FROM receipt_plan p JOIN items i ON i.id = p.item_id
+      FROM doc_plan p JOIN items i ON i.id = p.item_id
       WHERE p.doc_id = ? ORDER BY p.id`, docId),
 
-  /** Сколько ожидается по товару (0 — убрать из задания). Документ становится заданием на приёмку. */
+  /**
+   * Сколько ожидается (приход) или сколько нужно отобрать (расход) по товару; 0 — убрать из задания.
+   * Документ становится заданием и попадает в общий пул заданий кладовщиков.
+   */
   async setPlanQty(ctx: Ctx, docId: number, itemId: number, qty: number) {
     const d = await assertCanEdit(ctx, docId);
     need(ctx, can.operate);
-    if (d.type !== 'receipt' || d.source === 'return') throw new BusinessError('Задание составляется только для приходного ордера');
+    if (d.type === 'move' || d.source === 'return') throw new BusinessError('Задание составляется для приходного или расходного ордера');
     if (!(qty >= 0)) throw new BusinessError('Количество не может быть отрицательным');
     await inTransaction(ctx.db, async (t) => {
-      if (qty === 0) await t.runAsync('DELETE FROM receipt_plan WHERE doc_id = ? AND item_id = ?', docId, itemId);
+      if (qty === 0) await t.runAsync('DELETE FROM doc_plan WHERE doc_id = ? AND item_id = ?', docId, itemId);
       else {
-        await t.runAsync(`INSERT INTO receipt_plan(doc_id, item_id, qty) VALUES(?, ?, ?)
+        await t.runAsync(`INSERT INTO doc_plan(doc_id, item_id, qty) VALUES(?, ?, ?)
           ON CONFLICT(doc_id, item_id) DO UPDATE SET qty = excluded.qty`, docId, itemId, round3(qty));
       }
       await t.runAsync("UPDATE documents SET mode = 'plan' WHERE id = ?", docId);
@@ -319,27 +329,54 @@ export const documents = {
    */
   async setFactQty(ctx: Ctx, docId: number, itemId: number, qty: number) {
     const d = await assertCanEdit(ctx, docId);
-    if (d.type !== 'receipt' || d.source === 'return') throw new BusinessError('Только для приходного ордера');
+    if (d.type === 'move' || d.source === 'return') throw new BusinessError('Только для приходного или расходного ордера');
     if (!(qty >= 0)) throw new BusinessError('Количество не может быть отрицательным');
+    // в расходе у строк есть места отбора — их можно только сбросить и отобрать заново
+    if (d.type === 'issue' && qty > 0) throw new BusinessError('В расходе отберите товар из конкретного места');
     await inTransaction(ctx.db, async (t) => {
       await t.runAsync('DELETE FROM doc_lines WHERE doc_id = ? AND item_id = ?', docId, itemId);
       if (qty > 0) await t.runAsync('INSERT INTO doc_lines(doc_id, item_id, qty) VALUES(?, ?, ?)', docId, itemId, round3(qty));
     });
   },
 
-  /** ПК: принять всё по заданию — недостающее количество дописывается в факт. */
+  /**
+   * ПК: выполнить задание без сканирования. Приход — недостающее количество дописывается в принятое;
+   * расход — недостающее подбирается из мест хранения по FIFO. Возвращает нехватку по расходу.
+   */
   async fillFromPlan(ctx: Ctx, docId: number) {
     const d = await assertCanEdit(ctx, docId);
-    if (d.type !== 'receipt') throw new BusinessError('Только для приходного ордера');
+    if (d.type === 'move') throw new BusinessError('Только для приходного или расходного ордера');
     const plan = await documents.plan(ctx, docId);
-    if (!plan.length) throw new BusinessError('В документе нет задания на приёмку');
-    await inTransaction(ctx.db, async (t) => {
-      for (const p of plan) {
-        const f = await t.getFirstAsync<{ q: number }>('SELECT IFNULL(SUM(qty), 0) AS q FROM doc_lines WHERE doc_id = ? AND item_id = ?', docId, p.item_id);
-        const missing = round3(p.qty - (f?.q ?? 0));
-        if (missing > 0) await documents.addLine({ ...ctx, db: t }, docId, { itemId: p.item_id, qty: missing });
-      }
-    });
+    if (!plan.length) throw new BusinessError('В документе нет задания');
+    let shortage = 0;
+    for (const p of plan) {
+      const f = await ctx.db.getFirstAsync<{ q: number }>('SELECT IFNULL(SUM(qty), 0) AS q FROM doc_lines WHERE doc_id = ? AND item_id = ?', docId, p.item_id);
+      const missing = round3(p.qty - (f?.q ?? 0));
+      if (missing <= 0) continue;
+      if (d.type === 'receipt') await documents.addLine(ctx, docId, { itemId: p.item_id, qty: missing });
+      else shortage = round3(shortage + (await documents.addIssueLineAuto(ctx, docId, p.item_id, missing)).shortage);
+    }
+    return { shortage };
+  },
+
+  /** Взять задание в работу: кладовщик становится исполнителем, его ФИО попадает в ордер. */
+  async takeTask(ctx: Ctx, docId: number, force = false) {
+    need(ctx, can.operate);
+    const d = await getDocRaw(ctx.db, docId);
+    if (d.status !== 'draft') throw new BusinessError('Задание уже выполнено');
+    if (d.assignee_id === ctx.user.id) return d.assignee_id;
+    if (d.assignee_id && !force) throw new BusinessError(`Задание уже в работе у ${d.assignee_name}`, 'busy');
+    await ctx.db.runAsync(`UPDATE documents SET assignee_id = ?, assigned_at = datetime('now','localtime') WHERE id = ?`, ctx.user.id, docId);
+    return ctx.user.id;
+  },
+
+  /** Вернуть задание в общий пул. */
+  async releaseTask(ctx: Ctx, docId: number) {
+    need(ctx, can.operate);
+    const d = await getDocRaw(ctx.db, docId);
+    if (d.status !== 'draft') throw new BusinessError('Задание уже выполнено');
+    if (d.assignee_id && d.assignee_id !== ctx.user.id && !can.manageUsers(ctx.user.role)) deny('снятие чужого задания');
+    await ctx.db.runAsync('UPDATE documents SET assignee_id = NULL, assigned_at = NULL WHERE id = ?', docId);
   },
 
   // ---------------------------------------------------------------- распределение по получателям

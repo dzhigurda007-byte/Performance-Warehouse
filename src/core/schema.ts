@@ -241,6 +241,12 @@ const MIGRATIONS: string[] = [
     UNIQUE (doc_id, item_id)
   );
   `,
+  // v5: план задания общий для прихода и расхода; исполнитель задания (кладовщик, взявший его в работу)
+  `
+  ALTER TABLE receipt_plan RENAME TO doc_plan;
+  ALTER TABLE documents ADD COLUMN assignee_id INTEGER REFERENCES users(id);
+  ALTER TABLE documents ADD COLUMN assigned_at TEXT;
+  `,
 ];
 
 export async function migrate(db: DB): Promise<void> {

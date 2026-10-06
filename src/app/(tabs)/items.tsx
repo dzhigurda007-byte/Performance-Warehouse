@@ -43,7 +43,7 @@ export default function ItemsScreen() {
           ...topGroups.list.filter((g) => g.id !== topGroups.sel?.id).map((g) => ({ value: g.id, label: g.name })),
         ]} />
       ) : null}
-      {p.operate ? (
+      {p.manageItems ? (
         <View style={s.rowWrap}>
           <Button title="Новый товар" icon="+" style={{ flex: 1 }} onPress={() => router.push('/item/edit')} />
           <Button title="Из Excel" icon="⊞" variant="secondary" style={{ flex: 1 }}

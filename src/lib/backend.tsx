@@ -227,6 +227,7 @@ export function usePerms() {
     role,
     operate: can.operate(role),
     viewStock: can.viewStock(role),
+    manageItems: can.manageItems(role),
     takeForSelf: can.takeForSelf(role),
     invite: can.invite(role) && mode === 'server',
     administer: can.administer(role),

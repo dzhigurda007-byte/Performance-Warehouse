@@ -159,8 +159,15 @@ export interface DocumentRow {
   base_doc_number: string | null;
   warehouse_id: number | null;
   warehouse_name: string | null;
-  /** Позиций в задании на приёмку (0 — обычный ордер). */
+  /** Позиций в задании (0 — обычный ордер). */
   plan_count: number;
+  /** Сколько всего по заданию и сколько уже принято / отобрано. */
+  plan_qty: number;
+  lines_qty: number;
+  /** Кладовщик, взявший задание в работу. */
+  assignee_id: number | null;
+  assignee_name: string | null;
+  assigned_at: string | null;
 }
 
 export interface DocLine {

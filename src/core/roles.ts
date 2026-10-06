@@ -47,6 +47,8 @@ export const can = {
     r === 'admin' ? true : rank(r) >= ROLE_RANK.manager && rank(target) < rank(r),
   /** Склад: структура, номенклатура, приход, перемещение, списание, проведение. */
   operate: (r: Role) => rank(r) >= ROLE_RANK.storekeeper,
+  /** Номенклатура (справочник товаров и групп): видеть вкладку, заводить и править товары. */
+  manageItems: (r: Role) => rank(r) >= ROLE_RANK.manager,
   /** Видеть остатки склада. */
   viewStock: (r: Role) => rank(r) >= ROLE_RANK.employee,
   /** Брать ТМЦ со склада на себя (выдача себе). */

@@ -91,7 +91,7 @@ export const items = {
       'SELECT i.*, g.name AS group_name FROM items i LEFT JOIN item_groups g ON g.id = i.group_id WHERE i.id = ?', id),
 
   async save(ctx: Ctx, it: Partial<Item> & { sku: string; name: string }) {
-    need(ctx, can.operate);
+    need(ctx, can.manageItems, 'номенклатура (только руководитель и администратор)');
     const sku = it.sku.trim();
     const name = it.name.trim();
     if (!sku || !name) throw new BusinessError('Укажите артикул и наименование');
@@ -120,7 +120,7 @@ export const items = {
   },
 
   async remove(ctx: Ctx, id: number) {
-    need(ctx, can.operate);
+    need(ctx, can.manageItems, 'номенклатура (только руководитель и администратор)');
     const used = await ctx.db.getFirstAsync<{ n: number }>(`SELECT (SELECT COUNT(*) FROM moves WHERE item_id = ?)
       + (SELECT COUNT(*) FROM doc_lines WHERE item_id = ?) + (SELECT COUNT(*) FROM custody WHERE item_id = ?) AS n`,
     id, id, id);
@@ -141,7 +141,7 @@ export const items = {
    * Существующие артикулы обновляются, новые создаются.
    */
   async importRows(ctx: Ctx, rows: ImportRow[]): Promise<ImportResult> {
-    need(ctx, can.operate);
+    need(ctx, can.manageItems, 'номенклатура (только руководитель и администратор)');
     const res: ImportResult = { created: 0, updated: 0, skipped: 0, errors: [] };
     await inTransaction(ctx.db, async (t) => {
       for (let i = 0; i < rows.length; i++) {
@@ -162,7 +162,7 @@ export const items = {
       FROM item_groups g ORDER BY g.name`),
 
   async saveGroup(ctx: Ctx, g: { id?: number; name: string; parent_id?: number | null }) {
-    need(ctx, can.operate);
+    need(ctx, can.manageItems, 'номенклатура (только руководитель и администратор)');
     const name = g.name.trim();
     if (!name) throw new BusinessError('Укажите название группы');
     if (g.id && g.parent_id) {
@@ -178,7 +178,7 @@ export const items = {
   },
 
   async deleteGroup(ctx: Ctx, id: number) {
-    need(ctx, can.operate);
+    need(ctx, can.manageItems, 'номенклатура (только руководитель и администратор)');
     const ids = await groupWithChildren(ctx.db, id);
     await ctx.db.runAsync(`UPDATE items SET group_id = NULL WHERE group_id IN (${ids.map(() => '?').join(',')})`, ...ids);
     await ctx.db.runAsync('DELETE FROM item_groups WHERE id = ?', id);
