@@ -1,24 +1,23 @@
 import { Stack, router, useLocalSearchParams } from 'expo-router';
-import { useSQLiteContext } from 'expo-sqlite';
+import { useApi } from '../../lib/backend';
 import { useState } from 'react';
 import { ScrollView, TextInput, View } from 'react-native';
 import { Button, Card, Empty, H1, ListRow, Muted, Section, confirm, s, showError, useFocusLoad } from '../../components/ui';
-import * as repo from '../../db/repo';
-import { cellQr } from '../../domain/codes';
+import { cellQr } from '../../core/codes';
 import { printLabels } from '../../lib/print';
 
 export default function WarehouseScreen() {
-  const db = useSQLiteContext();
+  const api = useApi();
   const id = Number(useLocalSearchParams<{ id: string }>().id);
   const [code, setCode] = useState('');
   const [data, reload] = useFocusLoad(async () => ({
-    wh: await repo.getWarehouse(db, id),
-    racks: await repo.listRacks(db, id),
-  }), [db, id]);
+    wh: await api.getWarehouse(id),
+    racks: await api.listRacks(id),
+  }), [api, id]);
 
   async function addRack() {
     try {
-      await repo.addRack(db, id, code);
+      await api.addRack(id, code);
       setCode('');
       reload();
     } catch (e) {
@@ -27,7 +26,7 @@ export default function WarehouseScreen() {
   }
 
   async function printAll() {
-    const cells = await repo.listCellsOfWarehouse(db, id);
+    const cells = await api.listCellsOfWarehouse(id);
     if (!cells.length) return showError(new Error('На складе нет ячеек'));
     await printLabels(cells.map((c) => ({ qr: cellQr(c.id), title: c.address, subtitle: c.warehouse_name })));
   }
@@ -46,7 +45,7 @@ export default function WarehouseScreen() {
           <Button title="Удалить" variant="danger" style={{ flex: 1 }}
             onPress={() => confirm('Удалить склад?', 'Склад, стеллажи и ячейки будут удалены', async () => {
               try {
-                await repo.deleteWarehouse(db, id);
+                await api.deleteWarehouse(id);
                 router.back();
               } catch (e) {
                 showError(e);

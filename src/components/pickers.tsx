@@ -1,10 +1,9 @@
-import { useSQLiteContext } from 'expo-sqlite';
+import { useApi } from '../lib/backend';
 import { useEffect, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import * as repo from '../db/repo';
-import { formatQty, parseQty, parseScan } from '../domain/codes';
-import type { Box, CellAddress, Item, Rack, StockRow, Warehouse } from '../domain/types';
+import { formatQty, parseQty, parseScan } from '../core/codes';
+import type { Box, CellAddress, Item, Rack, StockRow, Warehouse } from '../core/types';
 import { Scanner } from './Scanner';
 import { Badge, Button, Empty, Field, ListRow, SearchBox, colors, s, showError } from './ui';
 
@@ -51,7 +50,7 @@ export function QtyPrompt({ visible, title, unit, max, initial, onClose, onSubmi
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1, backgroundColor: '#0008', justifyContent: 'center', padding: 24 }}
       >
-        <View style={[s.card, { padding: 20 }]}>
+        <View style={[s.card, { padding: 20, maxWidth: 440, width: '100%', alignSelf: 'center' }]}>
           <Text style={{ fontSize: 17, fontWeight: '700', marginBottom: 12, color: colors.text }}>{title}</Text>
           {max !== undefined ? (
             <Text style={{ color: colors.muted, marginBottom: 8 }}>Доступно: {formatQty(max)} {unit}</Text>
@@ -94,7 +93,7 @@ export function ItemPicker({ visible, onClose, onPick, allowCreate = true, newBa
   /** Открыть сразу форму создания с этим штрихкодом (отсканирован неизвестный товар). */
   newBarcode?: string;
 }) {
-  const db = useSQLiteContext();
+  const api = useApi();
   const [q, setQ] = useState('');
   const [items, setItems] = useState<(Item & { total: number })[]>([]);
   const [creating, setCreating] = useState(false);
@@ -102,8 +101,8 @@ export function ItemPicker({ visible, onClose, onPick, allowCreate = true, newBa
 
   useEffect(() => {
     if (!visible) return;
-    repo.listItems(db, q).then(setItems).catch(showError);
-  }, [db, q, visible]);
+    api.listItems(q).then(setItems).catch(showError);
+  }, [api, q, visible]);
 
   useEffect(() => {
     if (!visible) return;
@@ -114,14 +113,14 @@ export function ItemPicker({ visible, onClose, onPick, allowCreate = true, newBa
   }, [visible, newBarcode]);
 
   async function startCreate(barcode = '') {
-    setForm({ sku: await repo.suggestSku(db), name: barcode ? '' : q, unit: 'шт', barcode });
+    setForm({ sku: await api.suggestSku(), name: barcode ? '' : q, unit: 'шт', barcode });
     setCreating(true);
   }
 
   async function create() {
     try {
-      const id = await repo.saveItem(db, form);
-      const item = await repo.getItem(db, id);
+      const id = await api.saveItem(form);
+      const item = await api.getItem(id);
       if (item) onPick(item);
     } catch (e) {
       showError(e);
@@ -184,7 +183,7 @@ export function PlacePicker({ visible, title = 'Место хранения', al
   onClose: () => void;
   onPick: (p: PickedPlace) => void;
 }) {
-  const db = useSQLiteContext();
+  const api = useApi();
   const [whs, setWhs] = useState<Warehouse[]>([]);
   const [wh, setWh] = useState<Warehouse | null>(null);
   const [racks, setRacks] = useState<Rack[]>([]);
@@ -197,17 +196,17 @@ export function PlacePicker({ visible, title = 'Место хранения', al
   useEffect(() => {
     if (!visible) return;
     setWh(null); setRack(null); setCell(null);
-    repo.listWarehouses(db).then((w) => {
+    api.listWarehouses().then((w) => {
       setWhs(w);
       if (w.length === 1) setWh(w[0]);
     }).catch(showError);
-  }, [db, visible]);
-  useEffect(() => { if (wh) repo.listRacks(db, wh.id).then(setRacks).catch(showError); }, [db, wh]);
-  useEffect(() => { if (rack) repo.listCells(db, rack.id).then(setCells).catch(showError); }, [db, rack]);
-  useEffect(() => { if (cell) repo.listBoxesInCell(db, cell.id).then(setBoxes).catch(showError); }, [db, cell]);
+  }, [api, visible]);
+  useEffect(() => { if (wh) api.listRacks(wh.id).then(setRacks).catch(showError); }, [api, wh]);
+  useEffect(() => { if (rack) api.listCells(rack.id).then(setCells).catch(showError); }, [api, rack]);
+  useEffect(() => { if (cell) api.listBoxesInCell(cell.id).then(setBoxes).catch(showError); }, [api, cell]);
 
   async function openCell(id: number) {
-    const c = await repo.getCell(db, id);
+    const c = await api.getCell(id);
     if (!c) return;
     if (cellOnly || !allowBoxes) {
       onPick({ kind: 'cell', cellId: c.id, label: c.address });
@@ -217,7 +216,7 @@ export function PlacePicker({ visible, title = 'Место хранения', al
   }
 
   async function onScan(code: string) {
-    const r = await repo.resolveScan(db, parseScan(code));
+    const r = await api.resolveScan(code);
     if (r.type === 'cell') {
       setScan(false);
       await openCell(r.cell.id);
@@ -225,7 +224,7 @@ export function PlacePicker({ visible, title = 'Место хранения', al
     }
     if (r.type === 'box' && allowBoxes && !cellOnly) {
       setScan(false);
-      const b = await repo.getBox(db, r.box.id);
+      const b = await api.getBox(r.box.id);
       onPick({ kind: 'box', boxId: r.box.id, cellId: r.box.cell_id, label: `${b?.address ?? '—'} · ${r.box.code}` });
       return true;
     }
@@ -235,7 +234,7 @@ export function PlacePicker({ visible, title = 'Место хранения', al
   async function newBox() {
     if (!cell) return;
     try {
-      const b = await repo.createBox(db, cell.id);
+      const b = await api.createBox(cell.id);
       onPick({ kind: 'box', boxId: b.id, cellId: cell.id, label: `${cell.address} · ${b.code} (новый)` });
     } catch (e) {
       showError(e);
@@ -300,7 +299,7 @@ export function StockPicker({ visible, title = 'Выбор из остатков
   onClose: () => void;
   onPick: (row: StockRow) => void;
 }) {
-  const db = useSQLiteContext();
+  const api = useApi();
   const [q, setQ] = useState('');
   const [data, setData] = useState<StockRow[]>([]);
   useEffect(() => {
@@ -309,9 +308,9 @@ export function StockPicker({ visible, title = 'Выбор из остатков
       const t = q.trim().toLowerCase();
       setData(t ? rows.filter((r) => `${r.item_name} ${r.sku}`.toLowerCase().includes(t)) : rows);
     } else {
-      repo.stockSearch(db, q).then(setData).catch(showError);
+      api.stockSearch(q).then(setData).catch(showError);
     }
-  }, [db, q, rows, visible]);
+  }, [api, q, rows, visible]);
   useEffect(() => { if (visible) setQ(''); }, [visible]);
 
   return (
@@ -326,7 +325,8 @@ export function StockPicker({ visible, title = 'Выбор из остатков
           renderItem={({ item: r }) => (
             <ListRow
               title={r.item_name}
-              subtitle={`${r.sku} · ${r.address ?? '—'}${r.box_code ? ' · ' + r.box_code : ''}`}
+              subtitle={`${r.sku} · ${r.address ?? '—'}${r.box_code ? ' · ' + r.box_code : ''} · приёмка ${r.received_at}`}
+              left={r.is_buffer ? <Badge text="буфер" tone="warn" /> : undefined}
               right={`${formatQty(r.qty)} ${r.unit}`}
               onPress={() => onPick(r)}
             />
@@ -334,5 +334,37 @@ export function StockPicker({ visible, title = 'Выбор из остатков
         />
       </View>
     </Sheet>
+  );
+}
+
+// ------------------------------------------------------------------ текст
+
+export function TextPrompt({ visible, title, initial, placeholder, onClose, onSubmit }: {
+  visible: boolean;
+  title: string;
+  initial?: string;
+  placeholder?: string;
+  onClose: () => void;
+  onSubmit: (text: string) => void;
+}) {
+  const [text, setText] = useState('');
+  useEffect(() => {
+    if (visible) setText(initial ?? '');
+  }, [visible, initial]);
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ flex: 1, backgroundColor: '#0008', justifyContent: 'center', padding: 24 }}>
+        <View style={[s.card, { padding: 20, maxWidth: 440, width: '100%', alignSelf: 'center' }]}>
+          <Text style={{ fontSize: 17, fontWeight: '700', marginBottom: 12, color: colors.text }}>{title}</Text>
+          <TextInput value={text} onChangeText={setText} autoFocus multiline placeholder={placeholder}
+            placeholderTextColor={colors.muted} style={[s.input, { minHeight: 80, textAlignVertical: 'top' }]} />
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+            <Button title="Отмена" variant="ghost" style={{ flex: 1 }} onPress={onClose} />
+            <Button title="OK" style={{ flex: 1 }} onPress={() => onSubmit(text)} />
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
   );
 }

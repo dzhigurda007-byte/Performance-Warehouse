@@ -1,4 +1,4 @@
-name: Android APK
+name: Build APK and Windows server
 
 on:
   push:
@@ -9,53 +9,108 @@ permissions:
   contents: write
 
 jobs:
-  apk:
+  test:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
-
       - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
-
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - name: Install dependencies
-        run: npm ci
-
+      - run: npm ci
       - name: Typecheck and tests
         run: |
           npm run typecheck
           npm test
 
+  apk:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
       - name: Generate native Android project
         run: npx expo prebuild --platform android --no-install
-
       - name: Build release APK
         working-directory: android
         run: |
           ./gradlew assembleRelease --no-daemon --max-workers=2 -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8" -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
           cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/PerformanceWarehouse.apk
-
       - uses: actions/upload-artifact@v4
         with:
-          name: performance-warehouse-apk
+          name: apk
           path: android/app/build/outputs/apk/release/PerformanceWarehouse.apk
           if-no-files-found: error
 
-      - name: Publish APK to GitHub Release
+  windows:
+    needs: apk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build server and web workplace
+        run: |
+          npm run server:build
+          npx expo export --platform web --output-dir dist-web
+      - uses: actions/download-artifact@v4
+        with:
+          name: apk
+          path: apk
+      - name: Assemble Windows package (portable Node.js + server + web + APK)
+        run: |
+          set -e
+          VER=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep -o 'node-v22[0-9.]*-win-x64.zip' | head -1)
+          curl -fsSL -o node.zip "https://nodejs.org/dist/latest-v22.x/$VER"
+          unzip -q node.zip
+          PKG=PerformanceWarehouse-Server
+          mkdir -p $PKG/node $PKG/web/download
+          cp "${VER%.zip}/node.exe" $PKG/node/
+          cp server/dist/pw-server.cjs $PKG/
+          cp -r dist-web/. $PKG/web/
+          cp apk/PerformanceWarehouse.apk $PKG/web/download/
+          cp windows/* $PKG/
+          zip -qr PerformanceWarehouse-Server-Windows.zip $PKG
+          ls -la PerformanceWarehouse-Server-Windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: PerformanceWarehouse-Server-Windows.zip
+          if-no-files-found: error
+
+  release:
+    needs: [apk, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: apk-${{ github.run_number }}
-          name: Performance Warehouse APK ${{ github.run_number }}
+          tag_name: build-${{ github.run_number }}
+          name: Performance Warehouse — сборка ${{ github.run_number }}
           target_commitish: ${{ github.sha }}
           prerelease: true
           body: |
-            Сборка из ветки `${{ github.ref_name }}`, коммит ${{ github.sha }}.
-            Установка: скачайте PerformanceWarehouse.apk на телефон и откройте файл.
-          files: android/app/build/outputs/apk/release/PerformanceWarehouse.apk
+            Ветка `${{ github.ref_name }}`, коммит ${{ github.sha }}.
+
+            * **PerformanceWarehouse.apk** — приложение для Android (телефоны и ТСД).
+            * **PerformanceWarehouse-Server-Windows.zip** — локальный сервер склада для ПК с Windows:
+              распакуйте, запустите `start.cmd`. Инструкция — `README.txt` внутри архива.
+          files: |
+            out/PerformanceWarehouse.apk
+            out/PerformanceWarehouse-Server-Windows.zip

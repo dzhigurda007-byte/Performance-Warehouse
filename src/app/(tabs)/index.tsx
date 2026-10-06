@@ -1,17 +1,15 @@
-import { router } from 'expo-router';
-import { useSQLiteContext } from 'expo-sqlite';
+import { Redirect, router } from 'expo-router';
 import { useState } from 'react';
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { PlacePicker } from '../../components/pickers';
 import { Scanner } from '../../components/Scanner';
-import { Button, Card, Muted, Section, colors, s, showError, useFocusLoad } from '../../components/ui';
-import * as repo from '../../db/repo';
-import { parseScan } from '../../domain/codes';
-import type { DocMode, DocType } from '../../domain/types';
-import { useAuth, useUser } from '../../lib/auth-context';
+import { Badge, Muted, Section, colors, s, showError, useFocusLoad } from '../../components/ui';
+import type { DocMode, DocType } from '../../core/types';
+import { useApi, useBackend, usePerms } from '../../lib/backend';
+import { openScanned } from '../../lib/navigation';
 
-function Tile({ icon, title, subtitle, onPress, tone = colors.primary }: {
-  icon: string; title: string; subtitle: string; onPress: () => void; tone?: string;
+function Tile({ icon, title, subtitle, onPress, tone = colors.primary, badge }: {
+  icon: string; title: string; subtitle: string; onPress: () => void; tone?: string; badge?: string;
 }) {
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [s.card, { flexDirection: 'row', gap: 14, alignItems: 'center' },
@@ -24,109 +22,120 @@ function Tile({ icon, title, subtitle, onPress, tone = colors.primary }: {
         <Text style={{ fontSize: 17, fontWeight: '600', color: colors.text }}>{title}</Text>
         <Muted>{subtitle}</Muted>
       </View>
+      {badge ? <Badge text={badge} tone="warn" /> : null}
     </Pressable>
   );
 }
 
 export default function HomeScreen() {
-  const db = useSQLiteContext();
-  const user = useUser();
-  const { signOut } = useAuth();
+  const api = useApi();
+  const { user } = useBackend();
+  const p = usePerms();
   const [lookup, setLookup] = useState(false);
   const [moveScan, setMoveScan] = useState(false);
   const [moveBoxId, setMoveBoxId] = useState<number | null>(null);
 
   const [stats] = useFocusLoad(async () => {
-    const r = await db.getFirstAsync<{ items: number; drafts: number; boxes: number; cells: number }>(`
-      SELECT (SELECT COUNT(*) FROM items) AS items,
-        (SELECT COUNT(*) FROM documents WHERE status = 'draft') AS drafts,
-        (SELECT COUNT(*) FROM boxes) AS boxes,
-        (SELECT COUNT(*) FROM cells) AS cells`);
-    return r;
-  }, []);
+    if (!p.operate) return null;
+    const [docs, returns] = await Promise.all([
+      api.listDocuments({ status: 'draft' }),
+      p.custody ? api.pendingReturnReceipts() : Promise.resolve([]),
+    ]);
+    return { drafts: docs.length, returns: returns.length };
+  }, [api, p.operate, p.custody]);
+
+  if (!p.takeForSelf) return <Redirect href={p.custody ? '/custody' : '/more'} />;
 
   async function newDoc(type: DocType, mode: DocMode) {
     try {
-      const id = await repo.createDocument(db, type, mode, user.id);
+      const id = await api.createDocument(type, mode);
       router.push({ pathname: '/doc/[id]', params: { id: String(id) } });
     } catch (e) {
       showError(e);
     }
   }
 
-  async function onLookup(code: string) {
-    const r = await repo.resolveScan(db, parseScan(code));
-    if (r.type === 'none') return false;
-    setLookup(false);
-    if (r.type === 'cell') router.push({ pathname: '/cell/[id]', params: { id: String(r.cell.id) } });
-    if (r.type === 'box') router.push({ pathname: '/box/[id]', params: { id: String(r.box.id) } });
-    if (r.type === 'item') router.push({ pathname: '/item/[id]', params: { id: String(r.item.id) } });
-    return true;
-  }
-
-  async function onMoveScan(code: string) {
-    const r = await repo.resolveScan(db, parseScan(code));
-    if (r.type !== 'box') return false;
-    setMoveScan(false);
-    setMoveBoxId(r.box.id);
-    return true;
-  }
-
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.content}>
-      <Card style={{ flexDirection: 'row', alignItems: 'center' }}>
-        <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 17, fontWeight: '700', color: colors.text }}>{user.full_name}</Text>
-          <Muted>@{user.login}</Muted>
-        </View>
-        <Button title="Выйти" variant="ghost" onPress={() =>
-          Alert.alert('Выход', 'Выйти из аккаунта?', [{ text: 'Отмена' }, { text: 'Выйти', onPress: signOut }])} />
-      </Card>
+      <Muted>{user?.full_name}</Muted>
 
-      {stats ? (
-        <Muted>
-          Товаров: {stats.items} · Ячеек: {stats.cells} · Коробов: {stats.boxes} · Черновиков: {stats.drafts}
-        </Muted>
+      {p.operate && stats && (stats.drafts > 0 || stats.returns > 0) ? (
+        <Section title="Требует внимания">
+          {stats.returns > 0 ? (
+            <Tile icon="↩" title="Возвраты ждут проведения" tone={colors.warn} badge={String(stats.returns)}
+              subtitle="Приходные ордера по возвращённым ТМЦ" onPress={() => router.push({ pathname: '/documents', params: { filter: 'returns' } })} />
+          ) : null}
+          {stats.drafts > 0 ? (
+            <Tile icon="✎" title="Черновики документов" badge={String(stats.drafts)}
+              subtitle="Не проведены" onPress={() => router.push({ pathname: '/documents', params: { filter: 'drafts' } })} />
+          ) : null}
+        </Section>
       ) : null}
 
-      <Section title="Поступление">
-        <Tile icon="↓" title="Приходный ордер" tone={colors.success}
-          subtitle="Принять ТМЦ и разместить по ячейкам / коробам" onPress={() => newDoc('receipt', 'plan')} />
-      </Section>
+      {p.operate ? (
+        <Section title="Поступление">
+          <Tile icon="↓" title="Приходный ордер" tone={colors.success}
+            subtitle="Сканировать ШК на ТСД / телефоне, несколько штук по одному ШК" onPress={() => newDoc('receipt', 'fact')} />
+          <Tile icon="⊞" title="Приход из Excel" tone={colors.success}
+            subtitle="Файл: Артикул, Название, ШК, Количество → в буферную ячейку" onPress={() => router.push({ pathname: '/import', params: { kind: 'receipt' } })} />
+        </Section>
+      ) : null}
 
-      <Section title="Выдача">
-        <Tile icon="↑" title="Расходный ордер (заявка)" tone={colors.danger}
-          subtitle="Указать, что выдать, — система подберёт, откуда взять (FIFO)" onPress={() => newDoc('issue', 'plan')} />
-        <Tile icon="⌗" title="Расход по факту" tone={colors.warn}
-          subtitle="Сканировать короб / товар и изымать фактически" onPress={() => newDoc('issue', 'fact')} />
+      <Section title="Выдача и списание">
+        {p.operate ? (
+          <>
+            <Tile icon="↑" title="Расходный ордер (заявка)" tone={colors.danger}
+              subtitle="Что выдать — система подберёт, откуда взять" onPress={() => newDoc('issue', 'plan')} />
+            <Tile icon="⌗" title="Расходный ордер по факту" tone={colors.warn}
+              subtitle="Сканировать короб / ячейку / товар и изымать" onPress={() => newDoc('issue', 'fact')} />
+          </>
+        ) : (
+          <Tile icon="⌗" title="Взять ТМЦ со склада" tone={colors.warn}
+            subtitle={p.custody ? 'ТМЦ будут числиться на вас' : 'Выдача выключена администратором'}
+            onPress={() => (p.custody ? newDoc('issue', 'fact') : Alert.alert('Недоступно', 'Выдача ТМЦ выключена в настройках'))} />
+        )}
       </Section>
 
       <Section title="Инструменты">
-        <Tile icon="⌕" title="Что это? (сканер)" subtitle="Отсканировать QR ячейки, короба или товара"
+        {p.operate ? (
+          <>
+            <Tile icon="⇄" title="Перемещение товара" subtitle="Весь товар или часть по одному ШК в другую ячейку"
+              onPress={() => router.push('/move')} />
+            <Tile icon="▣" title="Переместить короб" subtitle="Сканировать короб и выбрать новую ячейку"
+              onPress={() => setMoveScan(true)} />
+          </>
+        ) : null}
+        <Tile icon="⌕" title="Что это? (сканер)" subtitle="QR ячейки, короба, товара или инвентарный номер"
           onPress={() => setLookup(true)} />
-        <Tile icon="⇄" title="Переместить короб" subtitle="Сканировать короб и выбрать новую ячейку"
-          onPress={() => setMoveScan(true)} />
       </Section>
 
-      <Scanner visible={lookup} onClose={() => setLookup(false)} onScan={onLookup} title="Поиск по коду" />
-      <Scanner visible={moveScan} onClose={() => setMoveScan(false)} onScan={onMoveScan}
-        title="Перемещение" hint="Отсканируйте QR короба" />
-      <PlacePicker
-        visible={moveBoxId !== null}
-        cellOnly
-        title="Куда переместить короб"
-        onClose={() => setMoveBoxId(null)}
-        onPick={async (p) => {
+      <Scanner visible={lookup} onClose={() => setLookup(false)} title="Поиск по коду"
+        onScan={async (code) => {
+          const r = await api.resolveScan(code);
+          if (r.type === 'none') return false;
+          setLookup(false);
+          openScanned(r);
+          return true;
+        }} />
+      <Scanner visible={moveScan} onClose={() => setMoveScan(false)} title="Перемещение короба" hint="Отсканируйте QR короба"
+        onScan={async (code) => {
+          const r = await api.resolveScan(code);
+          if (r.type !== 'box') return false;
+          setMoveScan(false);
+          setMoveBoxId(r.box.id);
+          return true;
+        }} />
+      <PlacePicker visible={moveBoxId !== null} cellOnly title="Куда переместить короб" onClose={() => setMoveBoxId(null)}
+        onPick={async (pl) => {
           const boxId = moveBoxId!;
           setMoveBoxId(null);
           try {
-            await repo.moveBox(db, boxId, p.cellId!, user.id);
-            Alert.alert('Готово', `Короб перемещён в ${p.label}`);
+            await api.moveBox(boxId, pl.cellId!);
+            Alert.alert('Готово', `Короб перемещён в ${pl.label}`);
           } catch (e) {
             showError(e);
           }
-        }}
-      />
+        }} />
     </ScrollView>
   );
 }

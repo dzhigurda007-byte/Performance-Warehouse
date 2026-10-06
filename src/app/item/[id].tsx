@@ -1,20 +1,19 @@
 import { Stack, router, useLocalSearchParams } from 'expo-router';
-import { useSQLiteContext } from 'expo-sqlite';
+import { useApi } from '../../lib/backend';
 import { ScrollView, View } from 'react-native';
 import { QrView } from '../../components/QrView';
 import { Badge, Button, Card, Empty, H1, ListRow, Muted, Section, confirm, s, showError, useFocusLoad } from '../../components/ui';
-import * as repo from '../../db/repo';
-import { formatQty, itemQr } from '../../domain/codes';
+import { formatQty, itemQr } from '../../core/codes';
 import { printLabels } from '../../lib/print';
 
 export default function ItemScreen() {
-  const db = useSQLiteContext();
+  const api = useApi();
   const id = Number(useLocalSearchParams<{ id: string }>().id);
   const [data] = useFocusLoad(async () => ({
-    item: await repo.getItem(db, id),
-    stock: await repo.stockByItem(db, id),
-    history: await repo.listMoves(db, { itemId: id }),
-  }), [db, id]);
+    item: await api.getItem(id),
+    stock: await api.stockByItem(id),
+    history: await api.listMoves({ itemId: id }),
+  }), [api, id]);
 
   if (!data?.item) return null;
   const { item, stock, history } = data;
@@ -36,7 +35,7 @@ export default function ItemScreen() {
         {!history.length && !stock.length ? (
           <Button title="Удалить товар" variant="danger" onPress={() => confirm('Удалить товар?', item.name, async () => {
             try {
-              await repo.deleteItem(db, id);
+              await api.deleteItem(id);
               router.back();
             } catch (e) {
               showError(e);

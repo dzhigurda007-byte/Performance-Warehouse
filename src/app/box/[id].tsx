@@ -1,26 +1,23 @@
 import { Stack, router, useLocalSearchParams } from 'expo-router';
-import { useSQLiteContext } from 'expo-sqlite';
+import { useApi } from '../../lib/backend';
 import { useEffect, useState } from 'react';
 import { Alert, ScrollView, View } from 'react-native';
 import { PlacePicker } from '../../components/pickers';
 import { QrView } from '../../components/QrView';
 import { Button, Card, Empty, Field, H1, ListRow, Muted, Section, confirm, s, showError, useFocusLoad } from '../../components/ui';
-import * as repo from '../../db/repo';
-import { boxQr, formatQty } from '../../domain/codes';
-import { useUser } from '../../lib/auth-context';
+import { boxQr, formatQty } from '../../core/codes';
 import { printLabels } from '../../lib/print';
 
 export default function BoxScreen() {
-  const db = useSQLiteContext();
-  const user = useUser();
+  const api = useApi();
   const id = Number(useLocalSearchParams<{ id: string }>().id);
   const [moving, setMoving] = useState(false);
   const [name, setName] = useState('');
   const [data, reload] = useFocusLoad(async () => ({
-    box: await repo.getBox(db, id),
-    content: await repo.stockInBox(db, id),
-    history: await repo.listMoves(db, { boxId: id }),
-  }), [db, id]);
+    box: await api.getBox(id),
+    content: await api.stockInBox(id),
+    history: await api.listMoves({ boxId: id }),
+  }), [api, id]);
 
   useEffect(() => setName(data?.box?.name ?? ''), [data?.box?.name]);
 
@@ -34,7 +31,7 @@ export default function BoxScreen() {
         <Muted>Место: {box.address ?? 'не размещён'}</Muted>
         <QrView value={boxQr(box.code)} caption={box.code} />
         <Field label="Описание короба" value={name} onChangeText={setName} placeholder="напр. Крепёж М8"
-          onEndEditing={() => repo.renameBox(db, id, name).catch(showError)} />
+          onEndEditing={() => api.renameBox(id, name).catch(showError)} />
         <View style={s.rowWrap}>
           <Button title="Печать" icon="⎙" variant="secondary" style={{ flex: 1 }}
             onPress={() => printLabels([{ qr: boxQr(box.code), title: box.code, subtitle: name || box.address || '' }])
@@ -45,7 +42,7 @@ export default function BoxScreen() {
           <Button title="Удалить пустой короб" variant="danger"
             onPress={() => confirm('Удалить короб?', box.code, async () => {
               try {
-                await repo.deleteBox(db, id);
+                await api.deleteBox(id);
                 router.back();
               } catch (e) {
                 showError(e);
@@ -57,8 +54,9 @@ export default function BoxScreen() {
       <Section title={`Содержимое (${content.length})`}>
         <View style={{ borderRadius: 12, overflow: 'hidden' }}>
           {content.length ? content.map((r) => (
-            <ListRow key={r.id} title={r.item_name} subtitle={r.sku} right={`${formatQty(r.qty)} ${r.unit}`}
-              onPress={() => router.push({ pathname: '/item/[id]', params: { id: String(r.item_id) } })} />
+            <ListRow key={r.id} title={r.item_name} subtitle={`${r.sku} · приёмка ${r.received_at}`} right={`${formatQty(r.qty)} ${r.unit}`}
+              onPress={() => router.push({ pathname: '/move', params: { boxId: String(id), itemId: String(r.item_id), lot: r.received_at } })}
+              onLongPress={() => router.push({ pathname: '/item/[id]', params: { id: String(r.item_id) } })} />
           )) : <Empty text="Короб пуст" />}
         </View>
       </Section>
@@ -76,7 +74,7 @@ export default function BoxScreen() {
         onPick={async (p) => {
           setMoving(false);
           try {
-            await repo.moveBox(db, id, p.cellId!, user.id);
+            await api.moveBox(id, p.cellId!);
             reload();
             Alert.alert('Готово', `Короб перемещён: ${p.label}`);
           } catch (e) {

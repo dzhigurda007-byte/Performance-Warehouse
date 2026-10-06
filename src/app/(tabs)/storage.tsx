@@ -1,12 +1,11 @@
 import { router } from 'expo-router';
-import { useSQLiteContext } from 'expo-sqlite';
+import { useApi } from '../../lib/backend';
 import { ScrollView, View } from 'react-native';
 import { Button, Empty, ListRow, Muted, s, useFocusLoad } from '../../components/ui';
-import * as repo from '../../db/repo';
 
 export default function StorageScreen() {
-  const db = useSQLiteContext();
-  const [whs] = useFocusLoad(() => repo.listWarehouses(db), [db]);
+  const api = useApi();
+  const [whs] = useFocusLoad(() => api.listWarehouses(), [api]);
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.content}>
       <Muted>Структура хранения: Склад → Стеллаж → Ячейка → (Короб) → Товар</Muted>

@@ -2,7 +2,7 @@
   "expo": {
     "name": "Performance Warehouse",
     "slug": "performance-warehouse",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -21,10 +21,12 @@
       "package": "com.performance.warehouse",
       "permissions": [
         "android.permission.CAMERA"
-      ]
+      ],
+      "versionCode": 2
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "output": "single"
     },
     "scheme": "pwarehouse",
     "plugins": [
@@ -34,6 +36,14 @@
         "expo-camera",
         {
           "cameraPermission": "Камера нужна для сканирования QR-кодов и штрихкодов ТМЦ"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
         }
       ]
     ],

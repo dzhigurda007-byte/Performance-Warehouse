@@ -41,3 +41,4 @@ yarn-error.*
 /android
 /dist-apk
 /server/dist
+/dist-web

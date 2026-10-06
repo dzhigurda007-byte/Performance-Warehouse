@@ -1,7 +1,7 @@
 import { Pressable, ScrollView, Text } from 'react-native';
 import { colors } from './ui';
 
-export function Chips<T extends string | number | undefined>({ options, value, onChange }: {
+export function Chips<T extends string | number | boolean | undefined>({ options, value, onChange }: {
   options: { value: T; label: string }[];
   value: T;
   onChange: (v: T) => void;

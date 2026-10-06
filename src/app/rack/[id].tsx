@@ -1,26 +1,25 @@
 import { Stack, router, useLocalSearchParams } from 'expo-router';
-import { useSQLiteContext } from 'expo-sqlite';
+import { useApi } from '../../lib/backend';
 import { useState } from 'react';
 import { Alert, ScrollView, TextInput, View } from 'react-native';
 import { Button, Card, Empty, H1, ListRow, Muted, Section, confirm, s, showError, useFocusLoad } from '../../components/ui';
-import * as repo from '../../db/repo';
-import { cellQr, formatAddress } from '../../domain/codes';
+import { cellQr, formatAddress } from '../../core/codes';
 import { printLabels } from '../../lib/print';
 
 export default function RackScreen() {
-  const db = useSQLiteContext();
+  const api = useApi();
   const id = Number(useLocalSearchParams<{ id: string }>().id);
   const [levels, setLevels] = useState('4');
   const [positions, setPositions] = useState('5');
   const [single, setSingle] = useState('');
   const [data, reload] = useFocusLoad(async () => ({
-    rack: await repo.getRack(db, id),
-    cells: await repo.listCells(db, id),
-  }), [db, id]);
+    rack: await api.getRack(id),
+    cells: await api.listCells(id),
+  }), [api, id]);
 
   async function bulk() {
     try {
-      const n = await repo.addCells(db, id, Number(levels), Number(positions));
+      const n = await api.addCells(id, Number(levels), Number(positions));
       Alert.alert('Готово', `Создано ячеек: ${n}`);
       reload();
     } catch (e) {
@@ -30,7 +29,7 @@ export default function RackScreen() {
 
   async function addOne() {
     try {
-      await repo.addCell(db, id, single);
+      await api.addCell(id, single);
       setSingle('');
       reload();
     } catch (e) {
@@ -54,7 +53,7 @@ export default function RackScreen() {
         <Button title="Удалить стеллаж" variant="danger"
           onPress={() => confirm('Удалить стеллаж?', 'Будут удалены и все его ячейки', async () => {
             try {
-              await repo.deleteRack(db, id);
+              await api.deleteRack(id);
               router.back();
             } catch (e) {
               showError(e);

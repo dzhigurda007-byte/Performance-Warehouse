@@ -3,6 +3,7 @@ import { useCallback, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -11,7 +12,7 @@ import {
   type TextInputProps,
   type ViewStyle,
 } from 'react-native';
-import { BusinessError } from '../db/repo';
+import { BusinessError } from '../core/db';
 
 export const colors = {
   bg: '#F2F4F7',
@@ -29,12 +30,24 @@ export const colors = {
   warnSoft: '#FEF0C7',
 };
 
+/** Сообщение пользователю (в браузере — системное окно, в приложении — Alert). */
+export function notify(title: string, message = '') {
+  if (Platform.OS === 'web') window.alert(message ? `${title}\n\n${message}` : title);
+  else Alert.alert(title, message);
+}
+
 export function showError(e: unknown) {
-  const msg = e instanceof BusinessError ? e.message : `Ошибка: ${e instanceof Error ? e.message : String(e)}`;
-  Alert.alert('Не выполнено', msg);
+  const msg = e instanceof BusinessError || (e instanceof Error && e.name === 'BusinessError')
+    ? (e as Error).message
+    : `Ошибка: ${e instanceof Error ? e.message : String(e)}`;
+  notify('Не выполнено', msg);
 }
 
 export function confirm(title: string, message: string, onYes: () => void, yes = 'Да') {
+  if (Platform.OS === 'web') {
+    if (window.confirm(`${title}\n\n${message}`)) onYes();
+    return;
+  }
   Alert.alert(title, message, [
     { text: 'Отмена', style: 'cancel' },
     { text: yes, style: 'destructive', onPress: onYes },

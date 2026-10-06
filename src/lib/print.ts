@@ -1,6 +1,6 @@
 import * as Print from 'expo-print';
-import { formatQty } from '../domain/codes';
-import type { DocLine, DocumentRow } from '../domain/types';
+import { formatQty } from '../core/codes';
+import type { DocLine, DocumentRow } from '../core/types';
 import { qrSvg } from './qr';
 
 export interface Label {

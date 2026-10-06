@@ -1,20 +1,19 @@
 import { Stack, router, useLocalSearchParams } from 'expo-router';
-import { useSQLiteContext } from 'expo-sqlite';
+import { useApi } from '../../lib/backend';
 import { ScrollView, View } from 'react-native';
 import { QrView } from '../../components/QrView';
 import { Badge, Button, Card, Empty, H1, ListRow, Muted, Section, confirm, s, showError, useFocusLoad } from '../../components/ui';
-import * as repo from '../../db/repo';
-import { cellQr, formatQty } from '../../domain/codes';
+import { cellQr, formatQty } from '../../core/codes';
 import { printLabels } from '../../lib/print';
 
 export default function CellScreen() {
-  const db = useSQLiteContext();
+  const api = useApi();
   const id = Number(useLocalSearchParams<{ id: string }>().id);
   const [data, reload] = useFocusLoad(async () => ({
-    cell: await repo.getCell(db, id),
-    loose: await repo.stockLooseInCell(db, id),
-    boxes: await repo.listBoxesInCell(db, id),
-  }), [db, id]);
+    cell: await api.getCell(id),
+    loose: await api.stockLooseInCell(id),
+    boxes: await api.listBoxesInCell(id),
+  }), [api, id]);
 
   if (!data?.cell) return null;
   const { cell, loose, boxes } = data;
@@ -32,7 +31,7 @@ export default function CellScreen() {
           <Button title="Удалить" variant="danger"
             onPress={() => confirm('Удалить ячейку?', cell.address, async () => {
               try {
-                await repo.deleteCell(db, id);
+                await api.deleteCell(id);
                 router.back();
               } catch (e) {
                 showError(e);
@@ -45,7 +44,7 @@ export default function CellScreen() {
         <Button title="+ Короб" variant="secondary" style={{ minHeight: 34, marginVertical: 0 }}
           onPress={async () => {
             try {
-              const b = await repo.createBox(db, id);
+              const b = await api.createBox(id);
               reload();
               router.push({ pathname: '/box/[id]', params: { id: String(b.id) } });
             } catch (e) {
@@ -62,12 +61,14 @@ export default function CellScreen() {
         </View>
       </Section>
 
+      {cell.is_buffer ? <Muted>Буферная ячейка: сюда попадает приход с ПК / из Excel и возвраты. Нажмите на товар, чтобы переместить его в ячейку хранения.</Muted> : null}
       <Section title={`Товары без короба (${loose.length})`}>
         <View style={{ borderRadius: 12, overflow: 'hidden' }}>
           {loose.length ? loose.map((r) => (
-            <ListRow key={r.id} title={r.item_name} subtitle={`${r.sku} · с ${r.first_in_at.slice(0, 10)}`}
+            <ListRow key={r.id} title={r.item_name} subtitle={`${r.sku} · приёмка ${r.received_at}`}
               right={`${formatQty(r.qty)} ${r.unit}`}
-              onPress={() => router.push({ pathname: '/item/[id]', params: { id: String(r.item_id) } })} />
+              onPress={() => router.push({ pathname: '/move', params: { cellId: String(id), itemId: String(r.item_id), lot: r.received_at } })}
+              onLongPress={() => router.push({ pathname: '/item/[id]', params: { id: String(r.item_id) } })} />
           )) : <Empty text="Пусто" />}
         </View>
       </Section>

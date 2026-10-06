@@ -1,25 +1,24 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useSQLiteContext } from 'expo-sqlite';
+import { useApi } from '../../lib/backend';
 import { useEffect, useState } from 'react';
 import { ScrollView } from 'react-native';
 import { Button, Field, s, showError } from '../../components/ui';
-import * as repo from '../../db/repo';
 
 export default function WarehouseEdit() {
-  const db = useSQLiteContext();
+  const api = useApi();
   const { id } = useLocalSearchParams<{ id?: string }>();
   const [form, setForm] = useState({ code: '', name: '', address: '' });
 
   useEffect(() => {
     if (!id) return;
-    repo.getWarehouse(db, Number(id)).then((w) => {
+    api.getWarehouse(Number(id)).then((w) => {
       if (w) setForm({ code: w.code, name: w.name, address: w.address ?? '' });
     });
-  }, [db, id]);
+  }, [api, id]);
 
   async function save() {
     try {
-      await repo.saveWarehouse(db, { id: id ? Number(id) : undefined, ...form });
+      await api.saveWarehouse({ id: id ? Number(id) : undefined, ...form });
       router.back();
     } catch (e) {
       showError(e);

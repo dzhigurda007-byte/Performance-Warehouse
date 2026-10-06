@@ -1,20 +1,19 @@
 import { router } from 'expo-router';
-import { useSQLiteContext } from 'expo-sqlite';
+import { useApi } from '../lib/backend';
 import { useState } from 'react';
 import { FlatList, Text, View } from 'react-native';
-import { Chips } from '../../components/Chips';
-import { Empty, ListRow, SearchBox, colors, s, useFocusLoad } from '../../components/ui';
-import * as repo from '../../db/repo';
-import { formatQty } from '../../domain/codes';
+import { Chips } from '../components/Chips';
+import { Empty, ListRow, SearchBox, colors, s, useFocusLoad } from '../components/ui';
+import { formatQty } from '../core/codes';
 
 /** Журнал движений ТМЦ: кто, когда, что и откуда взял / куда положил. */
 export default function HistoryScreen() {
-  const db = useSQLiteContext();
+  const api = useApi();
   const [q, setQ] = useState('');
   const [direction, setDirection] = useState<'in' | 'out' | undefined>('out');
   const [userId, setUserId] = useState<number | undefined>(undefined);
-  const [users] = useFocusLoad(() => repo.listUsers(db), [db]);
-  const [moves] = useFocusLoad(() => repo.listMoves(db, { search: q, direction, userId }), [db, q, direction, userId]);
+  const [users] = useFocusLoad(() => api.listUsers(), [api]);
+  const [moves] = useFocusLoad(() => api.listMoves({ search: q, direction, userId }), [api, q, direction, userId]);
 
   return (
     <View style={[s.screen, { padding: 16 }]}>
