@@ -3,7 +3,7 @@ import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { useApi, usePerms } from '../../lib/backend';
 import { ScrollView, View } from 'react-native';
 import { QrView } from '../../components/QrView';
-import { Badge, Button, Card, Empty, H1, ListRow, Muted, Section, confirm, s, showError, useFocusLoad } from '../../components/ui';
+import { Badge, Button, Card, Empty, H1, ListRow, Muted, Section, confirm, notify, s, showError, useFocusLoad } from '../../components/ui';
 import { formatQty, itemQr } from '../../core/codes';
 import { PrintMenu, type PrintJob } from '../../components/PrintMenu';
 
@@ -37,15 +37,21 @@ export default function ItemScreen() {
           <Button title="Этикетка" icon="⎙" variant="secondary" style={{ flex: 1 }}
             onPress={() => setPrintJob({ title: 'Печать этикеток', variants: [{ label: 'Товар', labels: () => [{ qr: itemQr(item.sku), title: item.sku, subtitle: item.name }] }] })} />
         </View>
-        {perms.manageItems && !history.length && !stock.length ? (
-          <Button title="Удалить товар" variant="danger" onPress={() => confirm('Удалить товар?', item.name, async () => {
-            try {
-              await api.deleteItem(id);
-              router.back();
-            } catch (e) {
-              showError(e);
-            }
-          })} />
+        {item.deleted_at ? <Badge text={`Удалён из номенклатуры ${item.deleted_at.slice(0, 10)}`} tone="danger" /> : null}
+        {perms.manageItems && !item.deleted_at ? (
+          <Button title="Удалить из номенклатуры" variant="danger" onPress={() => confirm('Удалить товар из номенклатуры?',
+            history.length
+              ? `${item.name}\n\nУ товара есть история — он пропадёт из номенклатуры и поиска, а проведённые документы и история сохранятся.`
+              : item.name,
+            async () => {
+              try {
+                const r = await api.deleteItem(id);
+                notify('Готово', r === 'deleted' ? 'Товар удалён из базы' : 'Товар убран из номенклатуры, история сохранена');
+                router.back();
+              } catch (e) {
+                showError(e);
+              }
+            }, 'Удалить')} />
         ) : null}
       </Card>
 

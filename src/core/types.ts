@@ -103,6 +103,8 @@ export interface Item {
   description: string | null;
   group_id: number | null;
   track_units: number;
+  /** Удалён из номенклатуры (история сохранена). */
+  deleted_at?: string | null;
 }
 
 /** Строка остатка с адресом хранения. */

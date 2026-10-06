@@ -44,7 +44,7 @@ async function groupByPath(db: DB, path: string): Promise<number | null> {
 export async function findItemByCode(db: DB, code: string) {
   const v = code.trim();
   return db.getFirstAsync<Item>(
-    'SELECT * FROM items WHERE barcode = ? OR sku = ? COLLATE NOCASE ORDER BY barcode = ? DESC LIMIT 1', v, v, v);
+    'SELECT * FROM items WHERE deleted_at IS NULL AND (barcode = ? OR sku = ? COLLATE NOCASE) ORDER BY barcode = ? DESC LIMIT 1', v, v, v);
 }
 
 async function upsertItem(db: DB, row: ImportRow): Promise<'created' | 'updated' | 'skipped'> {
@@ -81,7 +81,7 @@ export const items = {
     return ctx.db.getAllAsync<ItemListRow>(`
       SELECT i.*, g.name AS group_name, (SELECT IFNULL(SUM(qty), 0) FROM stock s WHERE s.item_id = i.id) AS total
       FROM items i LEFT JOIN item_groups g ON g.id = i.group_id
-      WHERE (? = '%%' OR i.search_name LIKE ? OR i.sku LIKE ? OR IFNULL(i.barcode, '') LIKE ?)
+      WHERE i.deleted_at IS NULL AND (? = '%%' OR i.search_name LIKE ? OR i.sku LIKE ? OR IFNULL(i.barcode, '') LIKE ?)
         ${groups.length ? `AND i.group_id IN (${groups.map(() => '?').join(',')})` : ''}
       ORDER BY i.name LIMIT 500`, q, likeFold(search), q, q, ...groups);
   },
@@ -119,13 +119,51 @@ export const items = {
     }
   },
 
-  async remove(ctx: Ctx, id: number) {
+  /**
+   * Удалить товар из номенклатуры (руководитель, администратор).
+   * Без истории — удаляется из базы полностью. С историей — убирается из номенклатуры и поиска,
+   * а проведённые документы и движения сохраняются; артикул и ШК освобождаются для новых товаров.
+   * Нельзя, пока товар есть на складе, на руках или в черновиках документов.
+   */
+  async remove(ctx: Ctx, id: number): Promise<'deleted' | 'archived'> {
     need(ctx, can.manageItems, 'номенклатура (только руководитель и администратор)');
+    const it = await ctx.db.getFirstAsync<Item & { deleted_at: string | null }>('SELECT * FROM items WHERE id = ?', id);
+    if (!it || it.deleted_at) return 'deleted';
+    const stock = await ctx.db.getFirstAsync<{ q: number }>('SELECT IFNULL(SUM(qty), 0) AS q FROM stock WHERE item_id = ?', id);
+    if ((stock?.q ?? 0) > 0) throw new BusinessError(`«${it.name}»: на складе числится ${stock!.q} ${it.unit} — сначала спишите или переместите остаток`);
+    const held = await ctx.db.getFirstAsync<{ n: number }>("SELECT COUNT(*) AS n FROM custody WHERE item_id = ? AND status = 'held'", id);
+    if ((held?.n ?? 0) > 0) throw new BusinessError(`«${it.name}»: числится на руках у сотрудников (${held!.n}) — сначала оформите возврат`);
+    const drafts = await ctx.db.getAllAsync<{ number: string }>(`
+      SELECT DISTINCT d.number FROM documents d
+      WHERE d.status = 'draft' AND (EXISTS (SELECT 1 FROM doc_lines l WHERE l.doc_id = d.id AND l.item_id = ?)
+        OR EXISTS (SELECT 1 FROM doc_plan p WHERE p.doc_id = d.id AND p.item_id = ?))`, id, id);
+    if (drafts.length) throw new BusinessError(`«${it.name}» есть в черновиках: ${drafts.map((d) => d.number).join(', ')} — уберите его оттуда`);
     const used = await ctx.db.getFirstAsync<{ n: number }>(`SELECT (SELECT COUNT(*) FROM moves WHERE item_id = ?)
-      + (SELECT COUNT(*) FROM doc_lines WHERE item_id = ?) + (SELECT COUNT(*) FROM custody WHERE item_id = ?) AS n`,
-    id, id, id);
-    if (used && used.n > 0) throw new BusinessError('Товар используется в документах — удалить нельзя');
-    await ctx.db.runAsync('DELETE FROM items WHERE id = ?', id);
+      + (SELECT COUNT(*) FROM doc_lines WHERE item_id = ?) + (SELECT COUNT(*) FROM custody WHERE item_id = ?)
+      + (SELECT COUNT(*) FROM doc_plan WHERE item_id = ?) + (SELECT COUNT(*) FROM stock WHERE item_id = ?) AS n`, id, id, id, id, id);
+    if (!used?.n) {
+      await ctx.db.runAsync('DELETE FROM items WHERE id = ?', id);
+      return 'deleted';
+    }
+    await ctx.db.runAsync(`UPDATE items SET deleted_at = datetime('now','localtime'), barcode = NULL,
+      sku = sku || ' (удалён #' || id || ')', search_name = NULL WHERE id = ?`, id);
+    return 'archived';
+  },
+
+  /** Удалить несколько товаров; ошибки по отдельным товарам не мешают остальным. */
+  async removeMany(ctx: Ctx, ids: number[]) {
+    need(ctx, can.manageItems, 'номенклатура (только руководитель и администратор)');
+    const res = { deleted: 0, archived: 0, errors: [] as string[] };
+    for (const id of ids) {
+      try {
+        const r = await items.remove(ctx, id);
+        if (r === 'deleted') res.deleted++;
+        else res.archived++;
+      } catch (e) {
+        res.errors.push(e instanceof Error ? e.message : String(e));
+      }
+    }
+    return res;
   },
 
   async suggestSku(ctx: Ctx) {
@@ -158,7 +196,7 @@ export const items = {
   // ---------------------------------------------------------------- группы
 
   listGroups: (ctx: Ctx) =>
-    ctx.db.getAllAsync<ItemGroup>(`SELECT g.*, (SELECT COUNT(*) FROM items i WHERE i.group_id = g.id) AS items
+    ctx.db.getAllAsync<ItemGroup>(`SELECT g.*, (SELECT COUNT(*) FROM items i WHERE i.group_id = g.id AND i.deleted_at IS NULL) AS items
       FROM item_groups g ORDER BY g.name`),
 
   async saveGroup(ctx: Ctx, g: { id?: number; name: string; parent_id?: number | null }) {

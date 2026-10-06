@@ -41,32 +41,58 @@ export function Scanner({
   const [message, setMessage] = useState<ScanFeedback | null>(null);
   const inputRef = useRef<TextInput>(null);
   const lock = useRef(false);
-  const last = useRef<{ code: string; at: number } | null>(null);
+  /** Последний код, который видит камера (наведение); засчитывается только по кнопке «СКАН». */
+  const seen = useRef<{ code: string; at: number } | null>(null);
+  const [inView, setInView] = useState<string | null>(null);
 
   useEffect(() => {
     if (visible) {
       setManual('');
       setMessage(null);
       lock.current = false;
-      last.current = null;
+      seen.current = null;
+      setInView(null);
     }
   }, [visible]);
+
+  // код пропал из кадра — гасим подсветку рамки
+  useEffect(() => {
+    if (!visible) return;
+    const t = setInterval(() => {
+      if (seen.current && Date.now() - seen.current.at > 700) {
+        seen.current = null;
+        setInView(null);
+      }
+    }, 250);
+    return () => clearInterval(t);
+  }, [visible]);
+
+  function onCameraCode(data: string) {
+    const c = data.trim();
+    if (!c) return;
+    seen.current = { code: c, at: Date.now() };
+    setInView((prev) => (prev === c ? prev : c));
+  }
+
+  /** Кнопка «СКАН»: засчитать код, который сейчас в кадре. Каждое нажатие — отдельный скан. */
+  function pressScan() {
+    const cur = seen.current;
+    if (!cur || Date.now() - cur.at > 1000) {
+      setMessage({ ok: false, tone: 'red', text: 'Код не в кадре — наведите камеру на ШК или QR и нажмите «СКАН»' });
+      return;
+    }
+    handle(cur.code, 'camera');
+  }
 
   const canAsk = !!perm && !perm.granted && perm.canAskAgain;
   useEffect(() => {
     if (visible && canAsk) requestPerm();
   }, [visible, canAsk, requestPerm]);
 
-  /**
-   * camera — камера видит один и тот же код много раз подряд, поэтому повтор в течение 2 с
-   * отбрасывается; сканер ТСД (поле ввода) — каждый скан учитывается, даже одинаковый ШК подряд.
-   */
+  /** camera — по кнопке «СКАН»; input — сканер ТСД / ручной ввод. Каждый скан учитывается, даже одинаковый ШК подряд. */
   async function handle(code: string, source: 'camera' | 'input') {
     const c = code.trim();
     if (!c || lock.current) return;
-    const now = Date.now();
-    if (source === 'camera' && last.current && last.current.code === c && now - last.current.at < 2000) return;
-    last.current = { code: c, at: now };
     lock.current = true;
     try {
       const res = await onScan(c);
@@ -97,7 +123,7 @@ export function Scanner({
               barcodeScannerSettings={{
                 barcodeTypes: ['qr', 'datamatrix', 'ean13', 'ean8', 'code128', 'code39', 'upc_a', 'upc_e', 'itf14'],
               }}
-              onBarcodeScanned={(r) => handle(r.data, 'camera')}
+              onBarcodeScanned={(r) => onCameraCode(r.data)}
             />
           ) : (
             <View style={st.center}>
@@ -107,7 +133,14 @@ export function Scanner({
               <Button title="Разрешить камеру" onPress={requestPerm} />
             </View>
           )}
-          {perm?.granted ? <View pointerEvents="none" style={st.frame} /> : null}
+          {perm?.granted ? <View pointerEvents="none" style={[st.frame, inView ? null : { borderColor: '#FFFFFFAA' }]} /> : null}
+          {perm?.granted ? (
+            <View pointerEvents="none" style={st.inView}>
+              <Text style={{ color: '#fff', textAlign: 'center', fontSize: 15 }}>
+                {inView ? `В кадре: ${inView}` : 'Наведите камеру на ШК / QR'}
+              </Text>
+            </View>
+          ) : null}
         </View>
         <View style={st.bottom}>
           {hint ? <Text style={st.hint}>{hint}</Text> : null}
@@ -116,6 +149,12 @@ export function Scanner({
               <Text style={[st.bannerText, { color: TONE[message.tone].fg }]}>{message.text}</Text>
             </View>
           ) : message ? <Text style={[st.msg, message.ok && { color: '#86EFAC' }]}>{message.text}</Text> : null}
+          {perm?.granted ? (
+            <Pressable onPress={pressScan}
+              style={({ pressed }) => [st.scanBtn, !inView && { backgroundColor: '#15803D99' }, pressed && { opacity: 0.75 }]}>
+              <Text style={st.scanText}>СКАН</Text>
+            </Pressable>
+          ) : null}
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <TextInput
               ref={inputRef}
@@ -166,6 +205,9 @@ const st = StyleSheet.create({
   hint: { color: '#D0D5DD', marginBottom: 8 },
   msg: { color: '#FCA5A5', marginBottom: 8 },
   banner: { borderRadius: 10, padding: 12, marginBottom: 10 },
+  scanBtn: { backgroundColor: '#16A34A', borderRadius: 14, paddingVertical: 18, alignItems: 'center', marginBottom: 10 },
+  scanText: { color: '#fff', fontSize: 24, fontWeight: '800', letterSpacing: 2 },
+  inView: { position: 'absolute', left: 16, right: 16, bottom: 16, backgroundColor: '#000A', borderRadius: 10, padding: 8 },
   bannerText: { fontSize: 18, fontWeight: '700' },
   input: {
     flex: 1,

@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react';
 import { FlatList, View } from 'react-native';
 import { Chips } from '../../components/Chips';
 import { Scanner } from '../../components/Scanner';
-import { Button, Empty, ListRow, Muted, SearchBox, s, useFocusLoad } from '../../components/ui';
+import { Badge, Button, Empty, ListRow, Muted, SearchBox, confirm, notify, s, showError, useFocusLoad } from '../../components/ui';
 import { formatQty } from '../../core/codes';
 import { useApi, usePerms } from '../../lib/backend';
 
@@ -18,7 +18,30 @@ export default function ItemsScreen() {
   const [group, setGroup] = useState<number>(0);
   const [scan, setScan] = useState(false);
   const [groups] = useFocusLoad(() => api.listGroups(), [api]);
-  const [items] = useFocusLoad(() => api.listItems(q, group || null), [api, q, group]);
+  const [items, reload] = useFocusLoad(() => api.listItems(q, group || null), [api, q, group]);
+  // режим выбора для удаления (руководитель, администратор)
+  const [selecting, setSelecting] = useState(false);
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const toggle = (id: number) => setPicked((c) => { const n = new Set(c); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+
+  function removePicked() {
+    const ids = [...picked];
+    confirm(`Удалить ${ids.length} поз. из номенклатуры?`,
+      'Товары без истории удаляются из базы. Товары с историей пропадут из номенклатуры и поиска, проведённые документы сохранятся. ' +
+      'Товары с остатком на складе, на руках или в черновиках удалены не будут.',
+      async () => {
+        try {
+          const r = await api.deleteItems(ids);
+          notify('Удаление', `Удалено из базы: ${r.deleted}\nУбрано из номенклатуры (с историей): ${r.archived}` +
+            (r.errors.length ? `\n\nНе удалено (${r.errors.length}):\n${r.errors.slice(0, 10).join('\n')}` : ''));
+          setPicked(new Set());
+          setSelecting(false);
+          reload();
+        } catch (e) {
+          showError(e);
+        }
+      }, 'Удалить');
+  }
 
   const topGroups = useMemo(() => {
     const sel = groups?.find((g) => g.id === group);
@@ -50,6 +73,19 @@ export default function ItemsScreen() {
             onPress={() => router.push({ pathname: '/import', params: { kind: 'items' } })} />
         </View>
       ) : null}
+      {p.manageItems ? (
+        <View style={s.rowWrap}>
+          <Button title={selecting ? 'Отменить выбор' : 'Выбрать для удаления'} variant="ghost" style={{ flex: 1 }}
+            onPress={() => { setSelecting(!selecting); setPicked(new Set()); }} />
+          {selecting ? (
+            <Button title={picked.size === (items?.length ?? 0) && picked.size ? 'Снять все' : 'Выбрать все'} variant="ghost" style={{ flex: 1 }}
+              onPress={() => setPicked(picked.size === (items?.length ?? 0) ? new Set() : new Set((items ?? []).map((i) => i.id)))} />
+          ) : null}
+        </View>
+      ) : null}
+      {selecting && picked.size ? (
+        <Button title={`Удалить выбранные (${picked.size})`} variant="danger" icon="✕" onPress={removePicked} />
+      ) : null}
       <FlatList
         style={{ marginTop: 10, borderRadius: 12 }}
         data={items ?? []}
@@ -60,8 +96,10 @@ export default function ItemsScreen() {
           <ListRow
             title={item.name}
             subtitle={`${item.sku}${item.barcode ? ' · ШК ' + item.barcode : ''}${item.group_name ? ' · ' + item.group_name : ''}`}
+            left={selecting ? <Badge text={picked.has(item.id) ? '✓' : ' '} tone={picked.has(item.id) ? 'danger' : 'muted'} /> : undefined}
             right={`${formatQty(item.total)} ${item.unit}`}
-            onPress={() => router.push({ pathname: '/item/[id]', params: { id: String(item.id) } })}
+            onPress={() => (selecting ? toggle(item.id) : router.push({ pathname: '/item/[id]', params: { id: String(item.id) } }))}
+            onLongPress={p.manageItems ? () => { setSelecting(true); toggle(item.id); } : undefined}
           />
         )}
       />

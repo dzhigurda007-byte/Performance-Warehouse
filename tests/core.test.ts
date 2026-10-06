@@ -365,3 +365,34 @@ test('задания: общий пул, кладовщик берёт зада�
   assert.equal((await K2.getDocument(rt)).assignee_name, 'keeper2 ФИО');
   await assert.rejects(as('keeper').saveItem({ sku: 'NEWX', name: 'Новый' }), /номенклатура/);
 });
+
+test('удаление номенклатуры: руководитель и администратор; с историей — убирается из номенклатуры', async () => {
+  const B = as('boss');
+  const fresh = await B.saveItem({ sku: 'TMP-1', name: 'Временный', barcode: '999' });
+  assert.equal(await B.deleteItem(fresh), 'deleted');
+  assert.equal(await B.getItem(fresh), null);
+
+  await receive('keeper', [{ itemId: gloves, qty: 2, cellId: cellA }]);
+  await assert.rejects(as('keeper').deleteItem(gloves), /номенклатура/);
+  await assert.rejects(B.deleteItem(gloves), /на складе числится 2/);
+  const K = as('keeper');
+  const d = await K.createDocument('issue', 'fact');
+  await K.addLine(d, { itemId: gloves, qty: 2, cellId: cellA });
+  await K.postIssue(d, 'writeoff');
+  const draft = await K.createDocument('receipt', 'plan', { warehouseId: whId });
+  await K.setPlanQty(draft, gloves, 5);
+  await assert.rejects(B.deleteItem(gloves), /черновиках: ПО-/);
+  await K.deleteDocument(draft);
+
+  // остатка нет, есть история — товар убран из номенклатуры, документ и движения на месте
+  assert.equal(await as('admin').deleteItem(gloves), 'archived');
+  assert.equal((await B.listItems('перчат')).length, 0);
+  assert.equal(await B.findItemByCode('4600000000028'), null);
+  assert.equal((await K.listLines(d))[0].item_name, 'Перчатки');
+  assert.ok((await K.listMoves({ itemId: gloves })).length > 0);
+  // артикул и ШК освободились
+  await B.saveItem({ sku: 'GLOVES', name: 'Перчатки новые', barcode: '4600000000028' });
+
+  const r = await B.deleteItems([shovel, 999999]);
+  assert.deepEqual([r.deleted, r.archived, r.errors.length], [2, 0, 0]);
+});

@@ -47,6 +47,7 @@ export const api = {
   getItem: items.get,
   saveItem: items.save,
   deleteItem: items.remove,
+  deleteItems: items.removeMany,
   suggestSku: items.suggestSku,
   findItemByCode: items.findByCode,
   importItems: items.importRows,

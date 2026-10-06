@@ -247,6 +247,8 @@ const MIGRATIONS: string[] = [
   ALTER TABLE documents ADD COLUMN assignee_id INTEGER REFERENCES users(id);
   ALTER TABLE documents ADD COLUMN assigned_at TEXT;
   `,
+  // v6: удалённые из номенклатуры товары, у которых есть история (строки документов и движения сохраняются)
+  `ALTER TABLE items ADD COLUMN deleted_at TEXT;`,
 ];
 
 export async function migrate(db: DB): Promise<void> {
@@ -266,7 +268,7 @@ export async function migrate(db: DB): Promise<void> {
 /** Заполнить поисковые поля товаров, у которых они пустые (после обновления базы). */
 export async function syncItemSearch(db: DB, itemId?: number) {
   const rows = await db.getAllAsync<{ id: number; name: string; sku: string }>(
-    itemId ? 'SELECT id, name, sku FROM items WHERE id = ?' : 'SELECT id, name, sku FROM items WHERE search_name IS NULL',
+    itemId ? 'SELECT id, name, sku FROM items WHERE id = ?' : 'SELECT id, name, sku FROM items WHERE search_name IS NULL AND deleted_at IS NULL',
     ...(itemId ? [itemId] : []));
   for (const r of rows) await db.runAsync('UPDATE items SET search_name = ? WHERE id = ?', fold(`${r.name} ${r.sku}`), r.id);
 }
