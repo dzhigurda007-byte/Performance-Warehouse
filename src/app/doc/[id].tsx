@@ -195,6 +195,13 @@ export default function DocumentScreen() {
       else openStock({ title: `Короб ${r.box.code}: что изымаем?`, rows, pick: issueFromRow });
       return true;
     }
+    if (r.type === 'rack') {
+      const rows = await api.stockInRack(r.rack.id);
+      setScanOpen(false);
+      if (!rows.length) notify('Стеллаж пуст', r.rack.code);
+      else openStock({ title: `Стеллаж ${r.rack.code}: что изымаем?`, rows, pick: issueFromRow });
+      return true;
+    }
     if (r.type === 'cell') {
       const rows = await api.stockAllInCell(r.cell.id);
       setScanOpen(false);

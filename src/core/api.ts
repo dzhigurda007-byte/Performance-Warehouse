@@ -57,6 +57,7 @@ export const api = {
   stockByItem: (ctx: Ctx, itemId: number) => (need(ctx, can.viewStock), stockQueries.byItem(ctx.db, itemId)),
   stockLooseInCell: (ctx: Ctx, cellId: number) => (need(ctx, can.viewStock), stockQueries.looseInCell(ctx.db, cellId)),
   stockInBox: (ctx: Ctx, boxId: number) => (need(ctx, can.viewStock), stockQueries.inBox(ctx.db, boxId)),
+  stockInRack: (ctx: Ctx, rackId: number) => (need(ctx, can.viewStock), stockQueries.inRack(ctx.db, rackId)),
   stockAllInCell: (ctx: Ctx, cellId: number) => (need(ctx, can.viewStock), stockQueries.allInCell(ctx.db, cellId)),
   stockSearch: (ctx: Ctx, search: string, warehouseId?: number | null) =>
     (need(ctx, can.viewStock), stockQueries.search(ctx.db, search, warehouseId)),

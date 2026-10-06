@@ -6,11 +6,12 @@ import { PlacePicker } from '../../components/pickers';
 import { QrView } from '../../components/QrView';
 import { Button, Card, Empty, Field, H1, ListRow, Muted, Section, confirm, s, showError, useFocusLoad } from '../../components/ui';
 import { boxQr, formatQty } from '../../core/codes';
-import { printLabels } from '../../lib/print';
+import { PrintMenu, type PrintJob } from '../../components/PrintMenu';
 
 export default function BoxScreen() {
   const api = useApi();
   const id = Number(useLocalSearchParams<{ id: string }>().id);
+  const [printJob, setPrintJob] = useState<PrintJob | null>(null);
   const [moving, setMoving] = useState(false);
   const [name, setName] = useState('');
   const [data, reload] = useFocusLoad(async () => ({
@@ -34,8 +35,7 @@ export default function BoxScreen() {
           onEndEditing={() => api.renameBox(id, name).catch(showError)} />
         <View style={s.rowWrap}>
           <Button title="Печать" icon="⎙" variant="secondary" style={{ flex: 1 }}
-            onPress={() => printLabels([{ qr: boxQr(box.code), title: box.code, subtitle: name || box.address || '' }])
-              .catch(showError)} />
+            onPress={() => setPrintJob({ title: 'Печать этикеток', variants: [{ label: 'Короб', labels: () => [{ qr: boxQr(box.code), title: box.code, subtitle: name || box.address || '' }] }] })} />
           <Button title="Переместить" icon="⇄" variant="secondary" style={{ flex: 1 }} onPress={() => setMoving(true)} />
         </View>
         {!content.length ? (
@@ -81,6 +81,7 @@ export default function BoxScreen() {
             showError(e);
           }
         }} />
+      <PrintMenu job={printJob} onClose={() => setPrintJob(null)} />
     </ScrollView>
   );
 }

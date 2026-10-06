@@ -102,6 +102,9 @@ export const stockQueries = {
     db.getAllAsync<StockRow>(
       `${STOCK_SELECT} WHERE (s.cell_id = ? OR b.cell_id = ?) AND s.qty > 0 ORDER BY b.code, i.name, s.received_at`,
       cellId, cellId),
+  /** Всё, что лежит на стеллаже: россыпь в ячейках и содержимое коробов. */
+  inRack: (db: DB, rackId: number) =>
+    db.getAllAsync<StockRow>(`${STOCK_SELECT} WHERE r.id = ? AND s.qty > 0 ORDER BY c.code, b.code, i.name, s.received_at`, rackId),
   search: (db: DB, search: string, warehouseId?: number | null) => {
     const q = `%${search.trim()}%`;
     return db.getAllAsync<StockRow>(`${STOCK_SELECT}

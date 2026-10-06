@@ -3,12 +3,15 @@ import { useApi } from '../../lib/backend';
 import { ScrollView, View } from 'react-native';
 import { QrView } from '../../components/QrView';
 import { Badge, Button, Card, Empty, H1, ListRow, Muted, Section, confirm, s, showError, useFocusLoad } from '../../components/ui';
+import { useState } from 'react';
+import { PrintMenu, type PrintJob } from '../../components/PrintMenu';
 import { cellQr, formatQty } from '../../core/codes';
-import { printLabels } from '../../lib/print';
+import { cellTitle } from '../../lib/labels';
 
 export default function CellScreen() {
   const api = useApi();
   const id = Number(useLocalSearchParams<{ id: string }>().id);
+  const [job, setJob] = useState<PrintJob | null>(null);
   const [data, reload] = useFocusLoad(async () => ({
     cell: await api.getCell(id),
     loose: await api.stockLooseInCell(id),
@@ -26,8 +29,10 @@ export default function CellScreen() {
         <QrView value={cellQr(cell.id)} />
         <View style={s.rowWrap}>
           <Button title="Печать этикетки" icon="⎙" variant="secondary" style={{ flex: 1 }}
-            onPress={() => printLabels([{ qr: cellQr(cell.id), title: cell.address, subtitle: cell.warehouse_name }])
-              .catch(showError)} />
+            onPress={() => setJob({ title: `Этикетка ячейки ${cell.code}`, variants: [{
+              label: 'Ячейка',
+              labels: () => [{ qr: cellQr(cell.id), title: cellTitle(cell.rack_code, cell.code), subtitle: `${cell.address} · ${cell.warehouse_name}` }],
+            }] })} />
           <Button title="Удалить" variant="danger"
             onPress={() => confirm('Удалить ячейку?', cell.address, async () => {
               try {
@@ -72,6 +77,7 @@ export default function CellScreen() {
           )) : <Empty text="Пусто" />}
         </View>
       </Section>
+      <PrintMenu job={job} onClose={() => setJob(null)} />
     </ScrollView>
   );
 }

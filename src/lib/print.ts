@@ -1,44 +1,14 @@
-import * as Print from 'expo-print';
 import { formatQty } from '../core/codes';
 import type { DocLine, DocumentRow } from '../core/types';
-import { qrSvg } from './qr';
+import { esc, labelsHtml, type Label, type LabelLayout } from './labelsHtml';
+import { printHtml } from './printHtml';
 
-export interface Label {
-  qr: string;
-  title: string;
-  subtitle?: string;
-}
+export { LAYOUT_LABEL, labelsHtml, type Label, type LabelLayout } from './labelsHtml';
 
-function esc(s: string | null | undefined) {
-  return (s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
-}
-
-/**
- * Этикетки с QR-кодами: сетка на листе A4 (3 колонки). Печать через системный
- * диалог (AirPrint / Android Print) или «Сохранить как PDF» для термопринтера.
- */
-export async function printLabels(labels: Label[]) {
-  const cells = labels
-    .map(
-      (l) => `
-      <div class="lbl">
-        <div class="qr">${qrSvg(l.qr, 4, 1)}</div>
-        <div class="t">${esc(l.title)}</div>
-        ${l.subtitle ? `<div class="s">${esc(l.subtitle)}</div>` : ''}
-      </div>`,
-    )
-    .join('');
-  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
-    @page { margin: 8mm; }
-    body { font-family: -apple-system, Roboto, Arial, sans-serif; margin: 0; }
-    .grid { display: flex; flex-wrap: wrap; }
-    .lbl { width: 31%; margin: 1%; border: 1px dashed #999; padding: 6px; box-sizing: border-box;
-           text-align: center; page-break-inside: avoid; }
-    .qr svg { width: 42mm; height: 42mm; }
-    .t { font-size: 15px; font-weight: 700; margin-top: 2px; }
-    .s { font-size: 11px; color: #444; }
-  </style></head><body><div class="grid">${cells}</div></body></html>`;
-  await Print.printAsync({ html });
+/** Печать этикеток с QR-кодами (системный диалог печати или «Сохранить как PDF»). */
+export async function printLabels(labels: Label[], layout: LabelLayout = 'sheet') {
+  if (!labels.length) throw new Error('Нечего печатать');
+  await printHtml(labelsHtml(labels, layout));
 }
 
 const TITLES = { receipt: 'Приходный ордер', issue: 'Расходный ордер', move: 'Перемещение' } as const;
@@ -94,5 +64,5 @@ export async function printDocument(doc: DocumentRow, lines: DocLine[]) {
       <div>${isIssue ? 'Получил' : 'Сдал'}</div>
     </div>
   </body></html>`;
-  await Print.printAsync({ html });
+  await printHtml(html);
 }

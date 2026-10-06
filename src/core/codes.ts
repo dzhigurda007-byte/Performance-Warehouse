@@ -2,6 +2,7 @@
  * Маркировка. Внутренние QR-коды самоописывающие: по префиксу сканер сразу
  * понимает, что отсканировано (ячейка, короб или товар), — как SSCC/LPN в WMS.
  *
+ *   PW:R:<id стеллажа> — стеллаж (что хранится на стеллаже в целом)
  *   PW:C:<id ячейки>   — ячейка
  *   PW:B:<код короба>  — короб (BX-000001)
  *   PW:I:<артикул>     — товар
@@ -13,6 +14,7 @@
  * (EAN-13, Code128 производителя и т.п.) и ищется по полям штрихкод/артикул/код короба.
  */
 export type ScanTarget =
+  | { kind: 'rack'; id: number }
   | { kind: 'cell'; id: number }
   | { kind: 'box'; code: string }
   | { kind: 'item'; sku: string }
@@ -22,6 +24,10 @@ export type ScanTarget =
   | { kind: 'raw'; value: string };
 
 const PREFIX = 'PW';
+
+export function rackQr(id: number): string {
+  return `${PREFIX}:R:${id}`;
+}
 
 export function cellQr(id: number): string {
   return `${PREFIX}:C:${id}`;
@@ -53,10 +59,14 @@ export function parseScan(raw: string): ScanTarget {
   if (inv) return { kind: 'invite', server: inv[1], token: inv[2] };
   const srv = /^PW:S:(https?:\/\/\S+)$/i.exec(value);
   if (srv) return { kind: 'server', url: srv[1].replace(/\/+$/, '') };
-  const m = /^PW:([CBIK]):(.+)$/i.exec(value);
+  const m = /^PW:([RCBIK]):(.+)$/i.exec(value);
   if (!m) return { kind: 'raw', value };
   const tag = m[1].toUpperCase();
   const payload = m[2].trim();
+  if (tag === 'R') {
+    const id = Number(payload);
+    return Number.isInteger(id) && id > 0 ? { kind: 'rack', id } : { kind: 'raw', value };
+  }
   if (tag === 'C') {
     const id = Number(payload);
     return Number.isInteger(id) && id > 0 ? { kind: 'cell', id } : { kind: 'raw', value };

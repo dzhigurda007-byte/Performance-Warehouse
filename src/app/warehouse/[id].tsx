@@ -3,13 +3,14 @@ import { useApi } from '../../lib/backend';
 import { useState } from 'react';
 import { ScrollView, TextInput, View } from 'react-native';
 import { Button, Card, Empty, H1, ListRow, Muted, Section, confirm, s, showError, useFocusLoad } from '../../components/ui';
-import { cellQr } from '../../core/codes';
-import { printLabels } from '../../lib/print';
+import { PrintMenu, type PrintJob } from '../../components/PrintMenu';
+import { rackLabels } from '../../lib/labels';
 
 export default function WarehouseScreen() {
   const api = useApi();
   const id = Number(useLocalSearchParams<{ id: string }>().id);
   const [code, setCode] = useState('');
+  const [job, setJob] = useState<PrintJob | null>(null);
   const [data, reload] = useFocusLoad(async () => ({
     wh: await api.getWarehouse(id),
     racks: await api.listRacks(id),
@@ -25,10 +26,15 @@ export default function WarehouseScreen() {
     }
   }
 
-  async function printAll() {
-    const cells = await api.listCellsOfWarehouse(id);
-    if (!cells.length) return showError(new Error('На складе нет ячеек'));
-    await printLabels(cells.map((c) => ({ qr: cellQr(c.id), title: c.address, subtitle: c.warehouse_name })));
+  /** Все стеллажи склада: для каждого — лист с QR стеллажа, затем его ячейки. */
+  async function allLabels(withCells: boolean) {
+    const wh = data!.wh!;
+    const out = [];
+    for (const r of data!.racks) {
+      const cells = withCells ? await api.listCells(r.id) : [];
+      out.push(...rackLabels({ ...r, warehouse_code: wh.code, warehouse_name: wh.name }, cells, withCells));
+    }
+    return out;
   }
 
   if (!data?.wh) return null;
@@ -52,7 +58,14 @@ export default function WarehouseScreen() {
               }
             })} />
         </View>
-        <Button title="Печать QR всех ячеек склада" icon="⎙" variant="secondary" onPress={() => printAll().catch(showError)} />
+        <Button title="Печать QR стеллажей и ячеек склада" icon="⎙" variant="secondary" onPress={() => setJob({
+            title: `Печать: ${wh.name}`,
+            subtitle: 'QR каждого стеллажа печатается на отдельном листе, за ним — его ячейки',
+            variants: [
+              { label: 'Стеллажи и ячейки', labels: () => allLabels(true) },
+              { label: 'Только стеллажи', labels: () => allLabels(false) },
+            ],
+          })} />
       </Card>
 
       <Section title="Стеллажи">
@@ -68,6 +81,7 @@ export default function WarehouseScreen() {
           )) : <Empty text="Стеллажей нет" />}
         </View>
       </Section>
+      <PrintMenu job={job} onClose={() => setJob(null)} />
     </ScrollView>
   );
 }

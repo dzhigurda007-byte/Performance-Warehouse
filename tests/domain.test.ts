@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { allocate } from '../src/core/allocation';
-import { boxQr, cellQr, formatBoxCode, formatDocNumber, itemQr, parseQty, parseScan } from '../src/core/codes';
+import { boxQr, cellQr, rackQr, formatBoxCode, formatDocNumber, itemQr, parseQty, parseScan } from '../src/core/codes';
 
 test('QR-коды разбираются обратно в сущности', () => {
   assert.deepEqual(parseScan(cellQr(15)), { kind: 'cell', id: 15 });
+  assert.deepEqual(parseScan(rackQr(4)), { kind: 'rack', id: 4 });
   assert.deepEqual(parseScan(boxQr('BX-000007')), { kind: 'box', code: 'BX-000007' });
   assert.deepEqual(parseScan(itemQr('TM-00001')), { kind: 'item', sku: 'TM-00001' });
   assert.deepEqual(parseScan(' pw:c:3 '), { kind: 'cell', id: 3 });

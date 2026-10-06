@@ -67,6 +67,15 @@ export default function MoveScreen() {
       if (list.length === 1) chooseRow(list[0]);
       return true;
     }
+    if (r.type === 'rack') {
+      const list = await api.stockInRack(r.rack.id);
+      setScan(false);
+      setSourceLabel(`Стеллаж ${r.rack.code}`);
+      setRows(list);
+      setStep('item');
+      if (list.length === 1) chooseRow(list[0]);
+      return true;
+    }
     if (r.type === 'box') {
       const list = await api.stockInBox(r.box.id);
       setScan(false);

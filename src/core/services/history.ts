@@ -1,7 +1,7 @@
 import { need, type Ctx } from '../ctx';
 import { parseScan } from '../codes';
 import { can } from '../roles';
-import type { Box, CellAddress, CustodyRow, Item, MoveRow } from '../types';
+import type { Box, CellAddress, CustodyRow, Item, MoveRow, Rack } from '../types';
 import { custody } from './custody';
 import { findItemByCode } from './items';
 import { ADDRESS_SQL } from './stock';
@@ -18,6 +18,7 @@ export interface HistoryFilter {
 }
 
 export type Resolved =
+  | { type: 'rack'; rack: Rack & { warehouse_code: string; warehouse_name: string } }
   | { type: 'cell'; cell: CellAddress }
   | { type: 'box'; box: Box }
   | { type: 'item'; item: Item }
@@ -68,6 +69,10 @@ export const history = {
         return { type: 'server', url: t.url };
       case 'invite':
         return { type: 'invite', server: t.server, token: t.token };
+      case 'rack': {
+        const rack = await structure.getRack(ctx, t.id);
+        return rack ? { type: 'rack', rack } : { type: 'none', value: `Стеллаж #${t.id}` };
+      }
       case 'cell': {
         const cell = await structure.getCell(ctx, t.id);
         return cell ? { type: 'cell', cell } : { type: 'none', value: `Ячейка #${t.id}` };

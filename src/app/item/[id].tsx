@@ -1,14 +1,16 @@
+import { useState } from 'react';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { useApi } from '../../lib/backend';
 import { ScrollView, View } from 'react-native';
 import { QrView } from '../../components/QrView';
 import { Badge, Button, Card, Empty, H1, ListRow, Muted, Section, confirm, s, showError, useFocusLoad } from '../../components/ui';
 import { formatQty, itemQr } from '../../core/codes';
-import { printLabels } from '../../lib/print';
+import { PrintMenu, type PrintJob } from '../../components/PrintMenu';
 
 export default function ItemScreen() {
   const api = useApi();
   const id = Number(useLocalSearchParams<{ id: string }>().id);
+  const [printJob, setPrintJob] = useState<PrintJob | null>(null);
   const [data] = useFocusLoad(async () => ({
     item: await api.getItem(id),
     stock: await api.stockByItem(id),
@@ -30,7 +32,7 @@ export default function ItemScreen() {
           <Button title="Изменить" variant="ghost" style={{ flex: 1 }}
             onPress={() => router.push({ pathname: '/item/edit', params: { id: String(id) } })} />
           <Button title="Этикетка" icon="⎙" variant="secondary" style={{ flex: 1 }}
-            onPress={() => printLabels([{ qr: itemQr(item.sku), title: item.sku, subtitle: item.name }]).catch(showError)} />
+            onPress={() => setPrintJob({ title: 'Печать этикеток', variants: [{ label: 'Товар', labels: () => [{ qr: itemQr(item.sku), title: item.sku, subtitle: item.name }] }] })} />
         </View>
         {!history.length && !stock.length ? (
           <Button title="Удалить товар" variant="danger" onPress={() => confirm('Удалить товар?', item.name, async () => {
@@ -70,6 +72,7 @@ export default function ItemScreen() {
           )) : <Empty text="Движений нет" />}
         </View>
       </Section>
+      <PrintMenu job={printJob} onClose={() => setPrintJob(null)} />
     </ScrollView>
   );
 }

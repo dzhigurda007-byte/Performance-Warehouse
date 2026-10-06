@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ScrollView, View } from 'react-native';
 import { QrView } from '../../components/QrView';
@@ -6,12 +7,13 @@ import { custodyQr, formatQty } from '../../core/codes';
 import { ROLE_LABEL } from '../../core/roles';
 import { CONDITION_LABEL, CUSTODY_STATUS_LABEL } from '../../core/types';
 import { useApi } from '../../lib/backend';
-import { printLabels } from '../../lib/print';
+import { PrintMenu, type PrintJob } from '../../components/PrintMenu';
 
 /** Карточка ТМЦ на руках: инвентарный QR, у кого, кто и когда выдал, возврат. */
 export default function CustodyCard() {
   const api = useApi();
   const id = Number(useLocalSearchParams<{ id: string }>().id);
+  const [printJob, setPrintJob] = useState<PrintJob | null>(null);
   const [k] = useFocusLoad(() => api.getCustody(id), [api, id]);
   if (!k) return null;
   return (
@@ -22,7 +24,7 @@ export default function CustodyCard() {
         <View style={{ marginTop: 6 }}><Badge text={CUSTODY_STATUS_LABEL[k.status]} tone={k.status === 'held' ? 'warn' : 'success'} /></View>
         <QrView value={custodyQr(k.code)} caption={k.code} size={150} />
         <Button title="Печать инвентарной этикетки" icon="⎙" variant="secondary"
-          onPress={() => printLabels([{ qr: custodyQr(k.code), title: k.code, subtitle: `${k.item_name} · ${k.holder_name}` }]).catch(showError)} />
+          onPress={() => setPrintJob({ title: 'Печать этикеток', variants: [{ label: 'Инвентарный номер', labels: () => [{ qr: custodyQr(k.code), title: k.code, subtitle: `${k.item_name} · ${k.holder_name}` }] }] })} />
         {k.status === 'held' ? (
           <Button title="Вернуть на склад" variant="success" onPress={() => router.push({ pathname: '/return', params: { ids: String(k.id) } })} />
         ) : null}
@@ -38,6 +40,7 @@ export default function CustodyCard() {
             onPress={k.return_doc_id ? () => router.push({ pathname: '/doc/[id]', params: { id: String(k.return_doc_id) } }) : undefined} />
         ) : null}
       </View>
+      <PrintMenu job={printJob} onClose={() => setPrintJob(null)} />
     </ScrollView>
   );
 }

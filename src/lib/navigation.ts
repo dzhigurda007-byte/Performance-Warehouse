@@ -4,6 +4,8 @@ import type { Resolved } from '../core/services/history';
 /** Открыть карточку того, что отсканировано. */
 export function openScanned(r: Resolved) {
   switch (r.type) {
+    case 'rack':
+      return router.push({ pathname: '/rack/[id]', params: { id: String(r.rack.id) } });
     case 'cell':
       return router.push({ pathname: '/cell/[id]', params: { id: String(r.cell.id) } });
     case 'box':
