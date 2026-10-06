@@ -7,6 +7,8 @@ import { Badge, Button, Empty, Muted, SearchBox, Section, colors, s, useFocusLoa
 import { formatQty } from '../../core/codes';
 import { CONDITION_LABEL, CUSTODY_STATUS_LABEL, type CustodyRow, type CustodyStatus } from '../../core/types';
 import { useApi, useBackend, usePerms } from '../../lib/backend';
+import { FormMenu, type FormJob } from '../../components/FormMenu';
+import { custodyListForm } from '../../lib/docForms';
 
 type Tab = 'mine' | 'issued' | 'team';
 
@@ -33,6 +35,7 @@ export default function CustodyScreen() {
   const [q, setQ] = useState('');
   const [selected, setSelected] = useState<number[]>([]);
   const [scan, setScan] = useState(false);
+  const [formJob, setFormJob] = useState<FormJob | null>(null);
 
   const [rows] = useFocusLoad(async () => {
     setSelected([]);
@@ -71,6 +74,14 @@ export default function CustodyScreen() {
           { value: false, label: 'Вся история' },
         ]} />
         <SearchBox value={q} onChangeText={setQ} placeholder="ТМЦ, сотрудник, инвентарный №" />
+        {filtered.length ? (
+          <Button title="Печать списка" icon="⎙" variant="ghost" onPress={() => {
+            const title = tab === 'mine' ? 'ТМЦ на руках' : tab === 'team' ? 'ТМЦ, выданные команде' : 'ТМЦ, выданные под ответственность';
+            setFormJob({ title, variants: [{ build: (ctx) => custodyListForm(filtered, title, {
+              ...ctx, subtitle: `${tab === 'mine' ? `Сотрудник: ${user?.full_name ?? ''}` : `Выдал: ${user?.full_name ?? ''}`} · ${activeOnly ? 'только на руках' : 'вся история'}${q.trim() ? ` · отбор «${q.trim()}»` : ''}`,
+            }) }] });
+          }} />
+        ) : null}
 
         {pending && pending.length ? (
           <Section title="Возвраты ждут проведения">
@@ -140,6 +151,7 @@ export default function CustodyScreen() {
         router.push({ pathname: '/custody/[id]', params: { id: String(r.custody.id) } });
         return true;
       }} />
+      <FormMenu job={formJob} onClose={() => setFormJob(null)} />
     </View>
   );
 }

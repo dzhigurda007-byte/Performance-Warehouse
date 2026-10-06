@@ -71,3 +71,14 @@ export async function setMeta(db: DB, key: string, value: string | null): Promis
     value,
   );
 }
+
+/**
+ * Строка для поиска без учёта регистра. SQLite LIKE не различает регистр только
+ * у латиницы, поэтому для кириллицы храним и ищем «сложенный» текст: строчные, ё → е.
+ */
+export function fold(s: string | null | undefined): string {
+  return (s ?? '').toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
+}
+
+/** Значение для LIKE: %текст% в сложенном виде. */
+export const likeFold = (s: string | null | undefined) => `%${fold((s ?? '').trim())}%`;

@@ -1,5 +1,5 @@
-import { BusinessError, round3, today, type DB } from '../db';
-import type { Place, StockRow } from '../types';
+import { BusinessError, likeFold, round3, today, type DB } from '../db';
+import type { Place, StockReportFilter, StockReportRow, StockRow } from '../types';
 
 export const ADDRESS_SQL = `w.code || ' / ' || r.code || ' / ' || c.code`;
 
@@ -105,11 +105,24 @@ export const stockQueries = {
   /** Всё, что лежит на стеллаже: россыпь в ячейках и содержимое коробов. */
   inRack: (db: DB, rackId: number) =>
     db.getAllAsync<StockRow>(`${STOCK_SELECT} WHERE r.id = ? AND s.qty > 0 ORDER BY c.code, b.code, i.name, s.received_at`, rackId),
+  /** Отчёт «Остатки»: все партии с группой номенклатуры, с фильтром по складу, тексту и дате приёмки. */
+  report: (db: DB, f: StockReportFilter = {}) => {
+    const q = `%${(f.search ?? '').trim()}%`;
+    return db.getAllAsync<StockReportRow>(`
+      SELECT * FROM (${STOCK_SELECT.replace('SELECT s.id,', 'SELECT i.group_id, i.barcode, w.id AS warehouse_id, s.id,')}
+        WHERE s.qty > 0
+          AND (? = '%%' OR i.search_name LIKE ? OR i.sku LIKE ? OR IFNULL(i.barcode,'') LIKE ?)
+          AND (? = 0 OR w.id = ?)
+          AND (? = '' OR s.received_at >= ?)
+          AND (? = '' OR s.received_at <= ?))
+      ORDER BY item_name, received_at`,
+    q, likeFold(f.search), q, q, f.warehouseId ?? 0, f.warehouseId ?? 0, f.dateFrom ?? '', f.dateFrom ?? '', f.dateTo ?? '', f.dateTo ?? '');
+  },
   search: (db: DB, search: string, warehouseId?: number | null) => {
     const q = `%${search.trim()}%`;
     return db.getAllAsync<StockRow>(`${STOCK_SELECT}
-      WHERE s.qty > 0 AND (? = '%%' OR i.name LIKE ? OR i.sku LIKE ? OR IFNULL(i.barcode,'') LIKE ? OR IFNULL(b.code,'') LIKE ?)
+      WHERE s.qty > 0 AND (? = '%%' OR i.search_name LIKE ? OR i.sku LIKE ? OR IFNULL(i.barcode,'') LIKE ? OR IFNULL(b.code,'') LIKE ?)
         AND (? = 0 OR w.id = ?)
-      ORDER BY i.name, s.received_at LIMIT 500`, q, q, q, q, q, warehouseId ?? 0, warehouseId ?? 0);
+      ORDER BY i.name, s.received_at LIMIT 500`, q, likeFold(search), q, q, q, warehouseId ?? 0, warehouseId ?? 0);
   },
 };

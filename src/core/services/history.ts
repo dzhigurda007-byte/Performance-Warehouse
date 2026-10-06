@@ -1,4 +1,5 @@
 import { need, type Ctx } from '../ctx';
+import { likeFold } from '../db';
 import { parseScan } from '../codes';
 import { can } from '../roles';
 import type { Box, CellAddress, CustodyRow, Item, MoveRow, Rack } from '../types';
@@ -42,8 +43,8 @@ export const history = {
     if (f.direction === 'out') where.push('m.qty < 0');
     if (f.search?.trim()) {
       const q = `%${f.search.trim()}%`;
-      where.push("(i.name LIKE ? OR i.sku LIKE ? OR IFNULL(m.recipient,'') LIKE ? OR u.full_name LIKE ? OR IFNULL(d.number,'') LIKE ?)");
-      args.push(q, q, q, q, q);
+      where.push("(i.search_name LIKE ? OR i.sku LIKE ? OR IFNULL(m.recipient,'') LIKE ? OR u.full_name LIKE ? OR IFNULL(d.number,'') LIKE ?)");
+      args.push(likeFold(f.search), q, q, q, q);
     }
     return ctx.db.getAllAsync<MoveRow>(`
       SELECT m.id, m.doc_id, d.number AS doc_number, d.type AS doc_type, m.item_id, i.sku, i.name AS item_name,

@@ -15,7 +15,9 @@ import {
 } from '../../core/types';
 import { useApi, useBackend, usePerms } from '../../lib/backend';
 import { DOC_SOURCE_LABEL, DOC_TITLES } from '../../lib/docs';
-import { printDocument, printLabels } from '../../lib/print';
+import { printLabels } from '../../lib/print';
+import { documentForm } from '../../lib/docForms';
+import { FormMenu, type FormJob } from '../../components/FormMenu';
 
 type QtyReq = { title: string; unit?: string; max?: number; initial?: number; submit: (q: number) => Promise<void> };
 type StockReq = { title: string; rows?: StockRow[]; pick: (r: StockRow) => void };
@@ -47,6 +49,7 @@ export default function DocumentScreen() {
   const [stockReq, setStockReq] = useState<StockReq | null>(null);
   const [textReq, setTextReq] = useState<{ title: string; initial?: string; submit: (t: string) => void } | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
+  const [formJob, setFormJob] = useState<FormJob | null>(null);
   // Приход: место размещения (по умолчанию — буферная ячейка склада)
   const [target, setTarget] = useState<PickedPlace | null>(null);
   // Приход: каждый скан = +1 шт без запроса количества
@@ -297,13 +300,29 @@ export default function DocumentScreen() {
   const postReceipt = () => run(() => api.postReceipt(id),
     `${doc.number}: ${isReturn ? 'ТМЦ приняты на склад (буферная ячейка), отметки сохранены' : 'остатки обновлены'}`);
 
-  const writeOff = () => confirm('Списать ТМЦ?', 'Товар будет списан из базы в количестве, указанном в ордере.',
-    () => run(() => api.postIssue(id, 'writeoff'), `${doc.number}: ТМЦ списаны`), 'Списать');
+  const postedNote = 'Документ сохранён: «Ещё → Документы → Проведённые».';
+  const writeOff = () => confirm('Провести расходный ордер?',
+    'Товар будет отпущен со склада (списан с остатков) в количестве, указанном в ордере.',
+    () => run(() => api.postIssue(id, 'writeoff'), `${doc.number} проведён.\n${postedNote}`), 'Провести');
+
+  /** «Провести»: если включена выдача под ответственность — выбор, как провести. */
+  const postIssue = () => {
+    if (!perms.operate) return giveOut();
+    if (!perms.custody) return writeOff();
+    setMenu({
+      title: `Провести ${doc.number}`,
+      subtitle: 'Как провести расходный ордер?',
+      actions: [
+        { label: 'Отпуск со склада (списать с остатков)', onPress: writeOff },
+        { label: 'Выдать под ответственность (числится на получателях)', onPress: giveOut },
+      ],
+    });
+  };
 
   const giveOut = () => {
     if (!perms.operate) {
       return confirm('Взять ТМЦ на себя?', 'ТМЦ будут числиться на вас до возврата.',
-        () => run(() => api.postIssue(id, 'custody'), 'ТМЦ записаны на вас'), 'Взять');
+        () => run(() => api.postIssue(id, 'custody'), `ТМЦ записаны на вас.\n${postedNote}`), 'Взять');
     }
     saveHeader();
     router.push({ pathname: '/doc/allocate', params: { id: String(id) } });
@@ -311,7 +330,7 @@ export default function DocumentScreen() {
 
   const total = lines.reduce((a, l) => a + l.qty, 0);
   const subtitle = isReturn ? `возврат по ${doc.base_doc_number}` : DOC_SOURCE_LABEL[doc.source] ?? '';
-  const modeLabel = doc.post_mode === 'custody' ? 'выдано под ответственность' : doc.post_mode === 'writeoff' ? 'списано' : '';
+  const modeLabel = doc.post_mode === 'custody' ? 'выдано под ответственность' : doc.post_mode === 'writeoff' ? 'отпущено со склада' : '';
   const byHolder = new Map<string, typeof data.custody>();
   for (const k of data.custody) byHolder.set(k.holder_name, [...(byHolder.get(k.holder_name) ?? []), k]);
   const returnedNoReceipt = data.custody.some((k) => k.status === 'returned' && !k.return_doc_id);
@@ -344,7 +363,7 @@ export default function DocumentScreen() {
               </>
             ) : null}
             {isIssue && perms.operate ? (
-              <Field label="Кому / куда (для списания — получатель или объект)" value={header.recipient} editable={canEdit}
+              <Field label="Кому / куда (получатель или объект)" value={header.recipient} editable={canEdit}
                 onChangeText={(recipient) => setHeader({ ...header, recipient })} onEndEditing={saveHeader} />
             ) : null}
             <Field label={isReceipt ? 'Поставщик / основание' : 'Основание (заявка, объект)'} value={header.partner}
@@ -447,8 +466,17 @@ export default function DocumentScreen() {
           </View>
         ) : null}
 
-        <Button title={isIssue ? 'Печать ордера / лист подбора' : 'Печать'} icon="⎙" variant="ghost"
-          disabled={!lines.length} onPress={() => printDocument(doc, lines).catch(showError)} />
+        <Button title={isIssue && draft ? 'Печать ордера / лист подбора' : 'Печать документа'} icon="⎙" variant="secondary"
+          disabled={!lines.length} onPress={() => setFormJob({
+            title: `${DOC_TITLES[doc.type]} № ${doc.number}`,
+            subtitle: 'Печатная форма A4 по образцу 1С',
+            variants: [{
+              build: async (ctx) => documentForm(doc, lines, ctx, isIssue ? {
+                custody: data?.custody,
+                allocations: !data?.custody?.length ? await api.listAllocations(id) : undefined,
+              } : {}),
+            }],
+          })} />
         {!draft && doc.type !== 'move' && (perms.operate || isReturn) ? (
           <Button title="Отменить проведение" variant="danger" onPress={() => confirm('Отменить проведение?',
             'Остатки будут возвращены, документ станет черновиком', () => run(() => api.unpostDocument(id)), 'Отменить проведение')} />
@@ -462,12 +490,9 @@ export default function DocumentScreen() {
           {isReceipt ? (
             <Button title="Провести" variant="success" style={{ flex: 1 }} busy={busy} disabled={!lines.length} onPress={postReceipt} />
           ) : null}
-          {isIssue && perms.operate ? (
-            <Button title="Списать" variant="danger" style={{ flex: 1 }} busy={busy} disabled={!lines.length} onPress={writeOff} />
-          ) : null}
-          {isIssue && perms.custody ? (
-            <Button title={perms.operate ? 'Выдать' : 'Взять себе'} variant="success" style={{ flex: 1 }} busy={busy}
-              disabled={!lines.length} onPress={giveOut} />
+          {isIssue && (perms.operate || perms.custody) ? (
+            <Button title={perms.operate ? 'Провести' : 'Взять себе'} variant="success" style={{ flex: 1 }} busy={busy}
+              disabled={!lines.length} onPress={postIssue} />
           ) : null}
         </View>
       ) : null}
@@ -523,6 +548,7 @@ export default function DocumentScreen() {
           setTextReq(null);
           req?.submit(t);
         }} />
+      <FormMenu job={formJob} onClose={() => setFormJob(null)} />
       <ActionMenu visible={menu !== null} title={menu?.title} subtitle={menu?.subtitle} actions={menu?.actions ?? []}
         onClose={() => setMenu(null)} />
     </View>

@@ -34,3 +34,29 @@ export function printHtml(html: string): Promise<void> {
     }, 300);
   });
 }
+
+/**
+ * Открыть документ отдельной страницей (вкладкой) — как печатную форму в 1С:
+ * её можно распечатать или сохранить в PDF (Ctrl+P → «Сохранить как PDF»),
+ * имя файла подставится из названия документа. Если браузер запретил всплывающее
+ * окно — документ скачивается HTML-файлом.
+ */
+export async function saveHtml(html: string, fileName: string) {
+  const toolbar = `<div class="pw-toolbar" style="position:sticky;top:0;background:#1f2937;color:#fff;padding:8px 12px;font:14px Arial;display:flex;gap:12px;align-items:center;z-index:9">
+    <b style="flex:1">${fileName.replace(/[<>&]/g, '')}</b>
+    <button onclick="window.print()" style="font:14px Arial;padding:6px 14px;cursor:pointer">Печать / сохранить PDF</button></div>
+    <style>@media print { .pw-toolbar { display: none !important; } } @media screen { body { max-width: 210mm; margin: 0 auto !important; padding: 0 10mm 10mm; background: #fff; box-shadow: 0 0 12px #0003; } html { background: #e5e7eb; } }</style>`;
+  const full = html.replace(/<body([^>]*)>/i, `<body$1>${toolbar}`);
+  const blob = new Blob([full], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const win = window.open(url, '_blank');
+  if (!win) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${fileName.replace(/[\\/:*?"<>|]+/g, '_')}.html`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 120_000);
+}

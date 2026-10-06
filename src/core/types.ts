@@ -122,6 +122,21 @@ export interface StockRow {
   address: string | null; // «СКЛ / A / 01»
 }
 
+/** Партия в отчёте «Остатки»: + группа номенклатуры и склад. */
+export interface StockReportRow extends StockRow {
+  group_id: number | null;
+  warehouse_id: number | null;
+  barcode: string | null;
+}
+
+export interface StockReportFilter {
+  warehouseId?: number | null;
+  search?: string;
+  /** Дата приёмки партии, включительно, ГГГГ-ММ-ДД. */
+  dateFrom?: string | null;
+  dateTo?: string | null;
+}
+
 export interface DocumentRow {
   id: number;
   type: DocType;

@@ -7,11 +7,12 @@ import type { DocumentRow } from '../core/types';
 import { useApi, usePerms } from '../lib/backend';
 import { DOC_SOURCE_LABEL, DOC_TITLES, docSubtitle } from '../lib/docs';
 
-type Filter = 'all' | 'drafts' | 'receipt' | 'issue' | 'returns' | 'move';
+type Filter = 'all' | 'drafts' | 'posted' | 'receipt' | 'issue' | 'returns' | 'move';
 
 const QUERY: Record<Filter, Parameters<ReturnType<typeof useApi>['listDocuments']>[0]> = {
   all: {},
   drafts: { status: 'draft' },
+  posted: { status: 'posted' },
   receipt: { type: 'receipt' },
   issue: { type: 'issue' },
   returns: { source: 'return' },
@@ -21,7 +22,7 @@ const QUERY: Record<Filter, Parameters<ReturnType<typeof useApi>['listDocuments'
 function statusBadge(d: DocumentRow) {
   if (d.status === 'draft') return <Badge text="черновик" tone="warn" />;
   if (d.post_mode === 'custody') return <Badge text="выдано" tone="primary" />;
-  if (d.post_mode === 'writeoff') return <Badge text="списано" tone="danger" />;
+  if (d.post_mode === 'writeoff') return <Badge text="проведён" tone="success" />;
   return <Badge text="проведён" tone="success" />;
 }
 
@@ -41,6 +42,7 @@ export default function DocsScreen() {
       <Chips value={filter} onChange={setFilter} options={[
         { value: 'all' as Filter, label: 'Все' },
         { value: 'drafts' as Filter, label: 'Черновики' },
+        { value: 'posted' as Filter, label: 'Проведённые' },
         { value: 'receipt' as Filter, label: 'Приход' },
         { value: 'issue' as Filter, label: 'Расход' },
         { value: 'returns' as Filter, label: 'Возвраты' },

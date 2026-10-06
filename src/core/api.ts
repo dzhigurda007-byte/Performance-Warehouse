@@ -8,6 +8,7 @@ import { structure } from './services/structure';
 import { users } from './services/users';
 import { can } from './roles';
 import { need } from './ctx';
+import type { StockReportFilter } from './types';
 
 /**
  * Полный набор бизнес-операций. Каждая принимает контекст (база + пользователь)
@@ -59,6 +60,7 @@ export const api = {
   stockInBox: (ctx: Ctx, boxId: number) => (need(ctx, can.viewStock), stockQueries.inBox(ctx.db, boxId)),
   stockInRack: (ctx: Ctx, rackId: number) => (need(ctx, can.viewStock), stockQueries.inRack(ctx.db, rackId)),
   stockAllInCell: (ctx: Ctx, cellId: number) => (need(ctx, can.viewStock), stockQueries.allInCell(ctx.db, cellId)),
+  stockReport: (ctx: Ctx, f?: StockReportFilter) => (need(ctx, can.viewStock), stockQueries.report(ctx.db, f)),
   stockSearch: (ctx: Ctx, search: string, warehouseId?: number | null) =>
     (need(ctx, can.viewStock), stockQueries.search(ctx.db, search, warehouseId)),
 

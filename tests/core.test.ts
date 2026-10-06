@@ -7,6 +7,7 @@ import { auth } from '../src/core/services/users';
 import { migrate } from '../src/core/schema';
 import type { Role } from '../src/core/roles';
 import { openTestDb } from './helpers/fakeDb';
+import { stockItems, stockTree } from '../src/core/stockTree';
 
 let db: DB;
 const people: Record<string, SessionUser> = {};
@@ -241,4 +242,39 @@ test('иерархия: руководитель видит подчинённы
   const { receipts } = await as('w10').returnCustody([{ custodyId: k.id }]);
   await as('boss').postReceipt(receipts[0]);
   await assert.rejects(A.updateUser(people.boss.id, { supervisor_id: people.w1.id }), /замкнутая/);
+});
+
+test('отчёт «Остатки»: группы и подгруппы, отбор по дате приёмки и количеству, права', async () => {
+  const K = as('keeper');
+  await K.importItems([
+    { sku: 'KOMB', name: 'Кухонный комбайн', group: 'Техника / Бытовая / Кухонные комбайны' },
+    { sku: 'DRILL', name: 'Дрель', group: 'Техника / Строительная' },
+  ]);
+  const komb = (await K.findItemByCode('KOMB'))!.id;
+  const drill = (await K.findItemByCode('DRILL'))!.id;
+  await receive('keeper', [{ itemId: komb, qty: 3, cellId: cellA }, { itemId: drill, qty: 1, cellId: cellB }, { itemId: gloves, qty: 50, cellId: cellA }]);
+  // старая партия комбайнов
+  await db.runAsync("UPDATE stock SET received_at = '2026-01-15' WHERE item_id = ?", komb);
+  await receive('keeper', [{ itemId: komb, qty: 2, cellId: cellB }]);
+
+  const rows = await K.stockReport({});
+  const tree = stockTree(rows, await K.listGroups());
+  assert.deepEqual(tree.map((g) => g.name), ['Техника', 'Без группы']);
+  const tech = tree[0];
+  assert.equal(tech.items, 2);
+  assert.deepEqual(tech.groups.map((g) => g.name), ['Бытовая', 'Строительная']);
+  const kitchen = tech.groups[0].groups[0];
+  assert.equal(kitchen.name, 'Кухонные комбайны');
+  assert.equal(kitchen.path, 'Техника / Бытовая / Кухонные комбайны');
+  assert.deepEqual(kitchen.list.map((i) => [i.sku, i.qty, i.lots.length, i.first]), [['KOMB', 5, 2, '2026-01-15']]);
+
+  const recent = await K.stockReport({ dateFrom: '2026-02-01' });
+  assert.equal(recent.filter((r) => r.sku === 'KOMB').reduce((a, r) => a + r.qty, 0), 2);
+  assert.equal((await K.stockReport({ dateTo: '2026-01-31' })).length, 1);
+  assert.deepEqual(stockItems(rows, [], { minQty: 2, maxQty: 10 }).map((i) => i.sku), ['KOMB']);
+  assert.deepEqual(stockItems(rows, [], { sort: 'qty_desc' }).map((i) => i.sku), ['GLOVES', 'KOMB', 'DRILL']);
+  assert.deepEqual(stockItems(rows, [], { sort: 'date' }).map((i) => i.sku)[0], 'KOMB');
+  assert.equal((await K.stockReport({ search: 'дрел' })).length, 1);
+
+  await assert.rejects(as('w1').stockReport({}), /прав|доступ/i);
 });

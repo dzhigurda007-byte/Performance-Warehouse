@@ -81,7 +81,7 @@ export default function HomeScreen() {
         </Section>
       ) : null}
 
-      <Section title="Выдача и списание">
+      <Section title="Расход и выдача">
         {p.operate ? (
           <>
             <Tile icon="↑" title="Расходный ордер (заявка)" tone={colors.danger}

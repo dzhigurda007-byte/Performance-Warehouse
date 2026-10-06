@@ -1,4 +1,4 @@
-import { inTransaction, type DB } from './db';
+import { fold, inTransaction, type DB } from './db';
 
 /**
  * Схема БД построена по аналогии с 1С / WMS:
@@ -229,6 +229,8 @@ const MIGRATIONS: string[] = [
   CREATE INDEX idx_custody_issuer ON custody(issued_by, status);
   CREATE INDEX idx_custody_doc ON custody(issue_doc_id);
   `,
+  // v3: поиск по названию без учёта регистра для кириллицы (заполняется из приложения)
+  `ALTER TABLE items ADD COLUMN search_name TEXT;`,
 ];
 
 export async function migrate(db: DB): Promise<void> {
@@ -242,4 +244,13 @@ export async function migrate(db: DB): Promise<void> {
     version += 1;
     await db.execAsync(`PRAGMA user_version = ${version}`);
   }
+  await syncItemSearch(db);
+}
+
+/** Заполнить поисковые поля товаров, у которых они пустые (после обновления базы). */
+export async function syncItemSearch(db: DB, itemId?: number) {
+  const rows = await db.getAllAsync<{ id: number; name: string; sku: string }>(
+    itemId ? 'SELECT id, name, sku FROM items WHERE id = ?' : 'SELECT id, name, sku FROM items WHERE search_name IS NULL',
+    ...(itemId ? [itemId] : []));
+  for (const r of rows) await db.runAsync('UPDATE items SET search_name = ? WHERE id = ?', fold(`${r.name} ${r.sku}`), r.id);
 }

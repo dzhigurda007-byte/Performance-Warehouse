@@ -1,5 +1,5 @@
 import { need, type Ctx } from '../ctx';
-import { BusinessError, emptyToNull, inTransaction, type DB } from '../db';
+import { BusinessError, emptyToNull, fold, inTransaction, likeFold, type DB } from '../db';
 import { can } from '../roles';
 import type { Item, ItemGroup } from '../types';
 
@@ -63,12 +63,14 @@ async function upsertItem(db: DB, row: ImportRow): Promise<'created' | 'updated'
   }
   if (existing) {
     await db.runAsync(`UPDATE items SET name = COALESCE(?, name), barcode = COALESCE(?, barcode),
-      group_id = COALESCE(?, group_id) WHERE id = ?`, name || null, barcode, groupId, existing.id);
+      group_id = COALESCE(?, group_id), search_name = ? WHERE id = ?`, name || null, barcode, groupId,
+    fold(`${name || existing.name} ${existing.sku}`), existing.id);
     return 'updated';
   }
   if (!name) throw new BusinessError(`Нет названия для ${sku || barcode}`);
-  await db.runAsync('INSERT INTO items(sku, name, unit, barcode, group_id) VALUES(?, ?, ?, ?, ?)',
-    sku || `ШК-${barcode}`, name, 'шт', barcode, groupId);
+  const newSku = sku || `ШК-${barcode}`;
+  await db.runAsync('INSERT INTO items(sku, name, unit, barcode, group_id, search_name) VALUES(?, ?, ?, ?, ?, ?)',
+    newSku, name, 'шт', barcode, groupId, fold(`${name} ${newSku}`));
   return 'created';
 }
 
@@ -79,9 +81,9 @@ export const items = {
     return ctx.db.getAllAsync<ItemListRow>(`
       SELECT i.*, g.name AS group_name, (SELECT IFNULL(SUM(qty), 0) FROM stock s WHERE s.item_id = i.id) AS total
       FROM items i LEFT JOIN item_groups g ON g.id = i.group_id
-      WHERE (? = '%%' OR i.name LIKE ? OR i.sku LIKE ? OR IFNULL(i.barcode, '') LIKE ?)
+      WHERE (? = '%%' OR i.search_name LIKE ? OR i.sku LIKE ? OR IFNULL(i.barcode, '') LIKE ?)
         ${groups.length ? `AND i.group_id IN (${groups.map(() => '?').join(',')})` : ''}
-      ORDER BY i.name LIMIT 500`, q, q, q, q, ...groups);
+      ORDER BY i.name LIMIT 500`, q, likeFold(search), q, q, ...groups);
   },
 
   get: (ctx: Ctx, id: number) =>
@@ -101,15 +103,15 @@ export const items = {
       if (dup) throw new BusinessError('Этот штрихкод уже назначен другому товару');
     }
     const unit = emptyToNull(it.unit) ?? 'шт';
-    const args = [sku, name, unit, barcode, emptyToNull(it.description), it.group_id ?? null, it.track_units ? 1 : 0];
+    const args = [sku, name, unit, barcode, emptyToNull(it.description), it.group_id ?? null, it.track_units ? 1 : 0, fold(`${name} ${sku}`)];
     try {
       if (it.id) {
         await ctx.db.runAsync(`UPDATE items SET sku = ?, name = ?, unit = ?, barcode = ?, description = ?, group_id = ?,
-          track_units = ? WHERE id = ?`, ...args, it.id);
+          track_units = ?, search_name = ? WHERE id = ?`, ...args, it.id);
         return it.id;
       }
-      const r = await ctx.db.runAsync(`INSERT INTO items(sku, name, unit, barcode, description, group_id, track_units)
-        VALUES(?, ?, ?, ?, ?, ?, ?)`, ...args);
+      const r = await ctx.db.runAsync(`INSERT INTO items(sku, name, unit, barcode, description, group_id, track_units, search_name)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, ...args);
       return r.lastInsertRowId;
     } catch (e) {
       if (String(e).includes('UNIQUE')) throw new BusinessError('Товар с таким артикулом уже существует');
