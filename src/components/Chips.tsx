@@ -7,7 +7,7 @@ export function Chips<T extends string | number | boolean | undefined>({ options
   onChange: (v: T) => void;
 }) {
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, marginBottom: 10 }}
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, flexShrink: 0, marginBottom: 10 }}
       contentContainerStyle={{ gap: 8 }}>
       {options.map((o) => {
         const active = o.value === value;

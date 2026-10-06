@@ -28,7 +28,7 @@ export default function HistoryScreen() {
         ...(users ?? []).map((u) => ({ value: u.id as number | undefined, label: u.full_name })),
       ]} />
       <FlatList
-        style={{ borderRadius: 12 }}
+        style={{ flex: 1, borderRadius: 12 }}
         data={moves ?? []}
         keyExtractor={(m) => String(m.id)}
         ListEmptyComponent={<Empty text="Нет движений" />}

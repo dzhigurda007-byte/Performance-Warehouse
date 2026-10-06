@@ -87,7 +87,7 @@ export default function ItemsScreen() {
         <Button title={`Удалить выбранные (${picked.size})`} variant="danger" icon="✕" onPress={removePicked} />
       ) : null}
       <FlatList
-        style={{ marginTop: 10, borderRadius: 12 }}
+        style={{ flex: 1, marginTop: 10, borderRadius: 12 }}
         data={items ?? []}
         keyExtractor={(i) => String(i.id)}
         ListEmptyComponent={<Empty text="Номенклатура пуста" />}

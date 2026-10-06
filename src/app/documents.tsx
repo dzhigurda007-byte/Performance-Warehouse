@@ -51,7 +51,7 @@ export default function DocsScreen() {
         { value: 'move' as Filter, label: 'Перемещения' },
       ]} />
       <FlatList
-        style={{ borderRadius: 12 }}
+        style={{ flex: 1, borderRadius: 12 }}
         data={docs ?? []}
         keyExtractor={(d) => String(d.id)}
         ListEmptyComponent={<Empty text="Документов нет" />}
