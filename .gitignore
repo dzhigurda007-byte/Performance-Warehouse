@@ -42,3 +42,6 @@ yarn-error.*
 /dist-apk
 /server/dist
 /dist-web
+windows/pkg/
+windows/output/
+windows/app.ico

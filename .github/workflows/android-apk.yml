@@ -81,7 +81,7 @@ jobs:
           cp server/dist/pw-server.cjs $PKG/
           cp -r dist-web/. $PKG/web/
           cp apk/PerformanceWarehouse.apk $PKG/web/download/
-          cp windows/* $PKG/
+          cp windows/*.cmd windows/README.txt $PKG/
           zip -qr PerformanceWarehouse-Server-Windows.zip $PKG
           ls -la PerformanceWarehouse-Server-Windows.zip
       - uses: actions/upload-artifact@v4
@@ -90,8 +90,35 @@ jobs:
           path: PerformanceWarehouse-Server-Windows.zip
           if-no-files-found: error
 
+  installer:
+    needs: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows
+      - name: Build PerformanceWarehouse-Setup.exe (Inno Setup)
+        shell: pwsh
+        run: |
+          Expand-Archive PerformanceWarehouse-Server-Windows.zip -DestinationPath unz
+          Move-Item unz/PerformanceWarehouse-Server windows/pkg
+          python -m pip install --quiet pillow
+          python -c "from PIL import Image; Image.open('assets/icon.png').convert('RGBA').save('windows/app.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          $env:PW_VERSION = "2.0.${{ github.run_number }}"
+          & $iscc windows/installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Item windows/output/PerformanceWarehouse-Setup.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: windows/output/PerformanceWarehouse-Setup.exe
+          if-no-files-found: error
+
   release:
-    needs: [apk, windows]
+    needs: [apk, windows, installer]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -108,9 +135,11 @@ jobs:
           body: |
             Ветка `${{ github.ref_name }}`, коммит ${{ github.sha }}.
 
+            * **PerformanceWarehouse-Setup.exe** — установщик сервера склада для Windows (рекомендуется).
             * **PerformanceWarehouse.apk** — приложение для Android (телефоны и ТСД).
-            * **PerformanceWarehouse-Server-Windows.zip** — локальный сервер склада для ПК с Windows:
+            * **PerformanceWarehouse-Server-Windows.zip** — тот же сервер без установки (портативная версия):
               распакуйте, запустите `start.cmd`. Инструкция — `README.txt` внутри архива.
           files: |
+            out/PerformanceWarehouse-Setup.exe
             out/PerformanceWarehouse.apk
             out/PerformanceWarehouse-Server-Windows.zip
