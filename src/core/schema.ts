@@ -1,5 +1,4 @@
-import type { SQLiteDatabase } from 'expo-sqlite';
-import { inTransaction } from './tx';
+import { inTransaction, type DB } from './db';
 
 /**
  * Схема БД построена по аналогии с 1С / WMS:
@@ -125,9 +124,114 @@ const MIGRATIONS: string[] = [
   CREATE INDEX idx_moves_user ON moves(user_id);
   CREATE INDEX idx_moves_doc ON moves(doc_id);
   `,
+  // ---------------------------------------------------------------- v2
+  // Роли и иерархия, приглашения, группы номенклатуры, партии (дата приёмки),
+  // буферная ячейка, выдача ТМЦ под ответственность и возвраты.
+  `
+  CREATE TABLE departments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    parent_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+    head_id INTEGER REFERENCES users(id) ON DELETE SET NULL
+  );
+
+  ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'storekeeper';
+  ALTER TABLE users ADD COLUMN department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL;
+  ALTER TABLE users ADD COLUMN supervisor_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+  ALTER TABLE users ADD COLUMN position TEXT;
+  ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1;
+  UPDATE users SET role = 'admin' WHERE id = (SELECT MIN(id) FROM users);
+
+  CREATE TABLE invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL,
+    department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+    supervisor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    expires_at TEXT,
+    max_uses INTEGER NOT NULL DEFAULT 1,
+    uses INTEGER NOT NULL DEFAULT 0,
+    revoked INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE sessions (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    last_seen_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  );
+
+  CREATE TABLE item_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    parent_id INTEGER REFERENCES item_groups(id) ON DELETE CASCADE
+  );
+
+  ALTER TABLE items ADD COLUMN group_id INTEGER REFERENCES item_groups(id) ON DELETE SET NULL;
+  ALTER TABLE items ADD COLUMN track_units INTEGER NOT NULL DEFAULT 0;
+
+  ALTER TABLE cells ADD COLUMN is_buffer INTEGER NOT NULL DEFAULT 0;
+
+  -- Партии: физический товар в ячейке хранится с датой приёмки.
+  ALTER TABLE stock ADD COLUMN received_at TEXT;
+  UPDATE stock SET received_at = substr(first_in_at, 1, 10);
+  DROP INDEX ux_stock_place;
+  CREATE UNIQUE INDEX ux_stock_lot ON stock(item_id, IFNULL(cell_id, 0), IFNULL(box_id, 0), received_at);
+
+  ALTER TABLE documents ADD COLUMN post_mode TEXT;      -- issue: writeoff | custody
+  ALTER TABLE documents ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'; -- manual | scan | excel | return
+  ALTER TABLE documents ADD COLUMN base_doc_id INTEGER REFERENCES documents(id);
+  ALTER TABLE documents ADD COLUMN warehouse_id INTEGER REFERENCES warehouses(id);
+
+  ALTER TABLE doc_lines ADD COLUMN received_at TEXT;
+  ALTER TABLE doc_lines ADD COLUMN to_box_id INTEGER REFERENCES boxes(id);
+  ALTER TABLE doc_lines ADD COLUMN custody_id INTEGER;
+  ALTER TABLE doc_lines ADD COLUMN condition TEXT;
+  ALTER TABLE doc_lines ADD COLUMN note TEXT;
+  ALTER TABLE doc_lines ADD COLUMN accept INTEGER NOT NULL DEFAULT 1;
+
+  ALTER TABLE moves ADD COLUMN kind TEXT;
+  ALTER TABLE moves ADD COLUMN received_at TEXT;
+  ALTER TABLE moves ADD COLUMN holder_id INTEGER REFERENCES users(id);
+
+  -- Распределение строк расходного ордера по получателям (выдача нескольким людям).
+  CREATE TABLE issue_allocations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    item_id INTEGER NOT NULL REFERENCES items(id),
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    qty REAL NOT NULL CHECK (qty > 0),
+    UNIQUE (doc_id, item_id, user_id)
+  );
+
+  -- ТМЦ на руках (под ответственностью). У каждой записи свой QR-код.
+  CREATE TABLE custody (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    item_id INTEGER NOT NULL REFERENCES items(id),
+    qty REAL NOT NULL CHECK (qty > 0),
+    holder_id INTEGER NOT NULL REFERENCES users(id),
+    issued_by INTEGER NOT NULL REFERENCES users(id),
+    issue_doc_id INTEGER NOT NULL REFERENCES documents(id),
+    warehouse_id INTEGER REFERENCES warehouses(id),
+    issued_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    status TEXT NOT NULL DEFAULT 'held', -- held | returned | closed | written_off | lost
+    return_condition TEXT,
+    return_comment TEXT,
+    returned_by INTEGER REFERENCES users(id),
+    returned_at TEXT,
+    return_doc_id INTEGER REFERENCES documents(id)
+  );
+  CREATE INDEX idx_custody_holder ON custody(holder_id, status);
+  CREATE INDEX idx_custody_issuer ON custody(issued_by, status);
+  CREATE INDEX idx_custody_doc ON custody(issue_doc_id);
+  `,
 ];
 
-export async function migrate(db: SQLiteDatabase): Promise<void> {
+export async function migrate(db: DB): Promise<void> {
   await db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
   let version = row?.user_version ?? 0;

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { allocate } from '../src/domain/allocation';
-import { boxQr, cellQr, formatBoxCode, formatDocNumber, itemQr, parseQty, parseScan } from '../src/domain/codes';
+import { allocate } from '../src/core/allocation';
+import { boxQr, cellQr, formatBoxCode, formatDocNumber, itemQr, parseQty, parseScan } from '../src/core/codes';
 
 test('QR-коды разбираются обратно в сущности', () => {
   assert.deepEqual(parseScan(cellQr(15)), { kind: 'cell', id: 15 });
