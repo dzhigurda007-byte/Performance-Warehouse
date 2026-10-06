@@ -7,6 +7,7 @@ import { formatQty } from '../core/codes';
 import { STOCK_SORT_LABEL, type StockLine, type StockSort } from '../core/stockTree';
 import { CONDITION_LABEL, CUSTODY_STATUS_LABEL, type CustodyRow, type DocLine, type DocumentRow } from '../core/types';
 import { esc } from './labelsHtml';
+import { CHECK_LABEL, receiptCheck, type PlanRow } from '../core/receiptCheck';
 
 export interface FormContext {
   /** Название организации из настроек. */
@@ -125,7 +126,8 @@ const unitsNote = (lines: { unit: string }[]) => {
 
 // ------------------------------------------------------------------ приходный ордер (М-4)
 
-export function receiptForm(doc: DocumentRow, lines: DocLine[], ctx: FormContext = {}): PrintableForm {
+export function receiptForm(doc: DocumentRow, lines: DocLine[], ctx: FormContext = {}, plan: PlanRow[] = []): PrintableForm {
+  if (plan.length) return receiptTaskForm(doc, lines, plan, ctx);
   const isReturn = doc.source === 'return';
   const title = isReturn ? 'Приходный ордер (возврат ТМЦ)' : 'Приходный ордер';
   const rows = lines.map((l, i) => `<tr>
@@ -153,6 +155,40 @@ export function receiptForm(doc: DocumentRow, lines: DocLine[], ctx: FormContext
     </thead><tbody>${rows}</tbody>
     <tfoot><tr><td colspan="4">Итого: ${lines.length} поз.</td><td class="num">${q(totalQty(lines))} ${esc(unitsNote(lines))}</td><td class="num">${doc.status === 'posted' ? `${q(totalQty(lines.filter((l) => !isReturn || l.accept)))} ${esc(unitsNote(lines))}` : ''}</td><td${isReturn ? ' colspan="2"' : ''}></td></tr></tfoot></table>
     <div class="signs">${sign('Принял (кладовщик)', doc.posted_by_name)}${sign(isReturn ? 'Сдал (сотрудник)' : 'Сдал (поставщик / экспедитор)')}</div>
+    ${footer(ctx, `${title} № ${doc.number}`)}`;
+  return { fileName: `${title} ${doc.number}`, html: page(`${title} № ${doc.number}`, body) };
+}
+
+/** Приходный ордер по заданию на приёмку: по документу — план, принято — факт, отклонение. */
+function receiptTaskForm(doc: DocumentRow, lines: DocLine[], plan: PlanRow[], ctx: FormContext): PrintableForm {
+  const title = 'Приходный ордер';
+  const chk = receiptCheck(plan, lines);
+  const rows = chk.rows.map((x, i) => `<tr>
+      <td class="c">${i + 1}</td>
+      <td>${esc(x.item_name)}${x.barcode ? `<div class="muted">ШК ${esc(x.barcode)}</div>` : ''}</td>
+      <td class="c">${esc(x.sku)}</td>
+      <td class="c">${esc(x.unit)}</td>
+      <td class="num">${x.plan ? q(x.plan) : '—'}</td>
+      <td class="num">${q(x.fact)}</td>
+      <td class="num">${x.diff ? (x.diff > 0 ? '+' : '') + q(x.diff) : ''}</td>
+      <td>${x.status === 'ok' ? 'сошлось' : esc(CHECK_LABEL[x.status].toLowerCase())}</td>
+    </tr>`).join('');
+  const body = `
+    ${orgBlock(ctx, 'Форма по образцу М-4', doc.warehouse_name ? `Склад: ${doc.warehouse_name}` : null)}
+    <h1>${esc(title.toUpperCase())} № ${esc(doc.number)}</h1>
+    <div class="sub">по заданию на приёмку · товар размещён в буферной ячейке склада</div>
+    <table class="head"><tr><th>Дата составления</th><th>Вид операции</th><th>Склад</th><th>Поставщик</th></tr>
+      <tr><td>${esc(docDate(doc))}</td><td>Поступление по заданию</td><td>${esc(doc.warehouse_name ?? '—')}</td><td>${esc(doc.partner ?? '—')}</td></tr></table>
+    ${metaRows([['Составил', doc.created_by_name], ['Статус', statusText(doc)],
+      ['Итог сверки', `сошлось ${chk.ok}, недостача ${chk.short}, излишек ${chk.over}, нет в задании ${chk.extra}`], ['Комментарий', doc.comment]])}
+    <table class="grid"><thead>
+      <tr><th rowspan="2" style="width:7mm">№</th><th colspan="2">Материальные ценности</th><th rowspan="2" style="width:12mm">Ед. изм.</th>
+        <th colspan="3">Количество</th><th rowspan="2" style="width:24mm">Результат</th></tr>
+      <tr><th>наименование</th><th style="width:24mm">артикул</th><th style="width:16mm">по документу</th><th style="width:16mm">принято</th><th style="width:16mm">отклонение</th></tr>
+    </thead><tbody>${rows}</tbody>
+    <tfoot><tr><td colspan="4">Итого: ${chk.rows.length} поз.</td><td class="num">${q(chk.plan)}</td><td class="num">${q(chk.fact)}</td>
+      <td class="num">${chk.fact !== chk.plan ? (chk.fact > chk.plan ? '+' : '') + q(chk.fact - chk.plan) : ''}</td><td></td></tr></tfoot></table>
+    <div class="signs">${sign('Принял (кладовщик)', doc.posted_by_name)}${sign('Сдал (поставщик / экспедитор)')}</div>
     ${footer(ctx, `${title} № ${doc.number}`)}`;
   return { fileName: `${title} ${doc.number}`, html: page(`${title} № ${doc.number}`, body) };
 }
@@ -241,11 +277,11 @@ export function moveForm(doc: DocumentRow, lines: DocLine[], ctx: FormContext = 
 
 export function documentForm(
   doc: DocumentRow, lines: DocLine[], ctx: FormContext = {},
-  extra: { allocations?: AllocationLine[]; custody?: CustodyRow[] } = {},
+  extra: { allocations?: AllocationLine[]; custody?: CustodyRow[]; plan?: PlanRow[] } = {},
 ): PrintableForm {
   if (doc.type === 'issue') return issueForm(doc, lines, ctx, extra);
   if (doc.type === 'move') return moveForm(doc, lines, ctx);
-  return receiptForm(doc, lines, ctx);
+  return receiptForm(doc, lines, ctx, extra.plan);
 }
 
 // ------------------------------------------------------------------ ведомость остатков

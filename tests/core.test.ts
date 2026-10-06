@@ -8,6 +8,7 @@ import { migrate } from '../src/core/schema';
 import type { Role } from '../src/core/roles';
 import { openTestDb } from './helpers/fakeDb';
 import { stockItems, stockTree } from '../src/core/stockTree';
+import { receiptCheck } from '../src/core/receiptCheck';
 
 let db: DB;
 const people: Record<string, SessionUser> = {};
@@ -98,6 +99,10 @@ test('импорт номенклатуры из Excel и приход из Exce
   assert.equal((await K.listItems('', top.id)).length, 1); // подгруппы учитываются
   const r = await K.createReceiptFromRows(whId, [{ sku: 'HAMMER', qty: 4 }, { sku: 'NEW-1', name: 'Новый', barcode: '222', qty: 2 }, { sku: 'X', qty: 0 }]);
   assert.equal(r.errors.length, 1);
+  // из Excel создаётся задание на приёмку: план есть, принятого пока нет
+  assert.equal((await K.receiptPlan(r.docId)).length, 2);
+  await assert.rejects(K.postReceipt(r.docId), /Ничего не принято/);
+  await K.fillFromPlan(r.docId); // ПК: принять всё по заданию
   await K.postReceipt(r.docId);
   const buf = await K.stockLooseInCell(buffer);
   assert.deepEqual(buf.map((s) => [s.sku, s.qty]).sort(), [['HAMMER', 4], ['NEW-1', 2]]);
@@ -109,7 +114,8 @@ test('импорт номенклатуры из Excel и приход из Exce
     { sku: '', name: 'Без артикула', qty: 1 },
   ]);
   assert.deepEqual(r3.errors, ['Строка 4: не указан артикул']);
-  assert.equal((await K.listLines(r3.docId)).length, 2);
+  assert.equal((await K.receiptPlan(r3.docId)).length, 2);
+  await K.fillFromPlan(r3.docId);
   await K.postReceipt(r3.docId);
   const buf2 = await K.stockLooseInCell(buffer);
   const total = (sku: string) => buf2.filter((s) => s.sku === sku).reduce((a, s) => a + s.qty, 0);
@@ -277,4 +283,35 @@ test('отчёт «Остатки»: группы и подгруппы, отб�
   assert.equal((await K.stockReport({ search: 'дрел' })).length, 1);
 
   await assert.rejects(as('w1').stockReport({}), /прав|доступ/i);
+});
+
+test('задание на приёмку: сканирование по ШК, сверка красный / зелёный / жёлтый, всё в буфер', async () => {
+  const K = as('keeper');
+  const doc = await K.createDocument('receipt', 'plan', { warehouseId: whId });
+  await K.setPlanQty(doc, shovel, 3);
+  await K.setPlanQty(doc, gloves, 10);
+  const hammer = await K.saveItem({ sku: 'HAMMER', name: 'Молоток', barcode: '4600000000035' });
+
+  // быстрый режим: 1 скан = +1 шт; ШК перчаток — коробка по 1 шт, количеством 4
+  for (let i = 0; i < 3; i++) await K.addLineByCode(doc, '4600000000011', 1);
+  await K.addLineByCode(doc, '4600000000028', 4);
+  await K.addLineByCode(doc, '4600000000035', 1); // нет в задании
+  let chk = receiptCheck(await K.receiptPlan(doc), await K.listLines(doc));
+  const st = () => Object.fromEntries(chk.rows.map((x) => [x.sku, `${x.status}:${x.fact}/${x.plan}`]));
+  assert.deepEqual(st(), { SHOVEL: 'ok:3/3', GLOVES: 'short:4/10', HAMMER: 'extra:1/0' });
+  assert.equal(chk.matched, false);
+
+  await K.addLineByCode(doc, '4600000000011', 1); // лишняя лопата
+  await K.setFactQty(doc, gloves, 10);
+  await K.setFactQty(doc, hammer, 0);
+  chk = receiptCheck(await K.receiptPlan(doc), await K.listLines(doc));
+  assert.deepEqual(st(), { SHOVEL: 'over:4/3', GLOVES: 'ok:10/10' });
+
+  // строки без места — после проведения всё в буферной ячейке
+  assert.ok((await K.listLines(doc)).every((l) => l.cell_id === null && l.box_id === null));
+  await K.postReceipt(doc);
+  const buf = await K.stockLooseInCell(buffer);
+  assert.deepEqual(buf.map((x) => [x.sku, x.qty]).sort(), [['GLOVES', 10], ['SHOVEL', 4]]);
+  await assert.rejects(K.setPlanQty(doc, shovel, 1), /проведён/);
+  await assert.rejects(as('emp').setPlanQty(await K.createDocument('receipt', 'plan', { warehouseId: whId }), shovel, 1), /прав|доступ|запрещ/i);
 });

@@ -41,7 +41,8 @@ export default function HomeScreen() {
       api.listDocuments({ status: 'draft' }),
       p.custody ? api.pendingReturnReceipts() : Promise.resolve([]),
     ]);
-    return { drafts: docs.length, returns: returns.length };
+    const tasks = docs.filter((d) => d.type === 'receipt' && d.plan_count > 0).length;
+    return { drafts: docs.length - tasks, returns: returns.length, tasks };
   }, [api, p.operate, p.custody]);
 
   if (!p.takeForSelf) return <Redirect href={p.custody ? '/custody' : '/more'} />;
@@ -74,10 +75,15 @@ export default function HomeScreen() {
 
       {p.operate ? (
         <Section title="Поступление">
-          <Tile icon="↓" title="Приходный ордер" tone={colors.success}
-            subtitle="Сканировать ШК на ТСД / телефоне, несколько штук по одному ШК" onPress={() => newDoc('receipt', 'fact')} />
-          <Tile icon="⊞" title="Приход из Excel" tone={colors.success}
-            subtitle="Файл: Артикул, Наименование, Количество → в буферную ячейку" onPress={() => router.push({ pathname: '/import', params: { kind: 'receipt' } })} />
+          <Tile icon="☑" title="Задания на приёмку" tone={colors.success} badge={stats?.tasks ? String(stats.tasks) : undefined}
+            subtitle="Сканировать ШК по заданию: красный — меньше, зелёный — сошлось, жёлтый — больше"
+            onPress={() => router.push({ pathname: '/documents', params: { filter: 'tasks' } })} />
+          <Tile icon="↓" title="Приходный ордер (без задания)" tone={colors.success}
+            subtitle="Сканировать ШК на ТСД / телефоне → в буферную ячейку" onPress={() => newDoc('receipt', 'fact')} />
+          <Tile icon="☰" title="Новое задание на приёмку" tone={colors.success}
+            subtitle="Составить на ПК: что и сколько ожидается" onPress={() => newDoc('receipt', 'plan')} />
+          <Tile icon="⊞" title="Задание на приёмку из Excel" tone={colors.success}
+            subtitle="Файл: Артикул, Наименование, Количество" onPress={() => router.push({ pathname: '/import', params: { kind: 'receipt' } })} />
         </Section>
       ) : null}
 

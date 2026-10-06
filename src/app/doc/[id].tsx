@@ -1,10 +1,10 @@
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Platform, ScrollView, Switch, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import { ActionMenu, type MenuAction } from '../../components/ActionMenu';
 import { Chips } from '../../components/Chips';
-import { ItemPicker, PlacePicker, QtyPrompt, StockPicker, TextPrompt, type PickedPlace } from '../../components/pickers';
-import { Scanner } from '../../components/Scanner';
+import { ItemPicker, QtyPrompt, StockPicker, TextPrompt } from '../../components/pickers';
+import { Scanner, type ScanFeedback } from '../../components/Scanner';
 import {
   Badge, Button, Card, Empty, Field, H1, ListRow, Muted, Section, colors, confirm, notify, s, showError, useFocusLoad,
 } from '../../components/ui';
@@ -14,6 +14,7 @@ import {
   CONDITION_LABEL, CUSTODY_STATUS_LABEL, type DocLine, type Item, type ReturnCondition, type StockRow,
 } from '../../core/types';
 import { useApi, useBackend, usePerms } from '../../lib/backend';
+import { CHECK_LABEL, receiptCheck, type CheckRow, type CheckStatus } from '../../core/receiptCheck';
 import { DOC_SOURCE_LABEL, DOC_TITLES } from '../../lib/docs';
 import { printLabels } from '../../lib/print';
 import { documentForm } from '../../lib/docForms';
@@ -25,6 +26,15 @@ type Menu = { title: string; subtitle?: string; actions: MenuAction[] };
 
 const CONDITIONS = Object.keys(CONDITION_LABEL) as ReturnCondition[];
 
+/** Цвет позиции задания: меньше — красный, сошлось — зелёный, больше — жёлтый. */
+const TONE: Record<CheckStatus, 'red' | 'green' | 'yellow'> = { short: 'red', ok: 'green', over: 'yellow', extra: 'yellow' };
+const ROW_BG: Record<CheckStatus, { bg: string; fg: string; border: string }> = {
+  short: { bg: '#FEE4E2', fg: '#B42318', border: '#F04438' },
+  ok: { bg: '#DCFAE6', fg: '#067647', border: '#17B26A' },
+  over: { bg: '#FEF0C7', fg: '#B54708', border: '#F79009' },
+  extra: { bg: '#FEF0C7', fg: '#B54708', border: '#F79009' },
+};
+
 export default function DocumentScreen() {
   const api = useApi();
   const { user } = useBackend();
@@ -32,26 +42,25 @@ export default function DocumentScreen() {
   const id = Number(useLocalSearchParams<{ id: string }>().id);
   const [data, reload] = useFocusLoad(async () => {
     const doc = await api.getDocument(id);
-    const [lines, warehouses, custody] = await Promise.all([
+    const [lines, warehouses, custody, plan] = await Promise.all([
       api.listLines(id),
       api.listWarehouses(),
       doc.type === 'issue' && doc.post_mode === 'custody' ? api.custodyByIssueDoc(id) : Promise.resolve([]),
+      doc.type === 'receipt' && doc.source !== 'return' ? api.receiptPlan(id) : Promise.resolve([]),
     ]);
-    return { doc, lines, warehouses, custody };
+    return { doc, lines, warehouses, custody, plan };
   }, [api, id]);
 
   const [header, setHeader] = useState({ partner: '', recipient: '', comment: '' });
   const [busy, setBusy] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
-  const [itemPick, setItemPick] = useState<{ barcode?: string } | null>(null);
-  const [placePick, setPlacePick] = useState<((p: PickedPlace) => void) | null>(null);
+  // purpose: plan — добавить в задание на приёмку (план), иначе — принять / добавить в расход
+  const [itemPick, setItemPick] = useState<{ barcode?: string; purpose?: 'plan' } | null>(null);
   const [qtyReq, setQtyReq] = useState<QtyReq | null>(null);
   const [stockReq, setStockReq] = useState<StockReq | null>(null);
   const [textReq, setTextReq] = useState<{ title: string; initial?: string; submit: (t: string) => void } | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [formJob, setFormJob] = useState<FormJob | null>(null);
-  // Приход: место размещения (по умолчанию — буферная ячейка склада)
-  const [target, setTarget] = useState<PickedPlace | null>(null);
   // Приход: каждый скан = +1 шт без запроса количества
   const [quick, setQuick] = useState(false);
   // Расход по факту: открытый (отсканированный) короб
@@ -61,6 +70,8 @@ export default function DocumentScreen() {
   const doc = data?.doc;
   const lines = data?.lines ?? [];
   const warehouses = data?.warehouses ?? [];
+  const plan = data?.plan ?? [];
+  const check = plan.length ? receiptCheck(plan, lines) : null;
 
   useEffect(() => {
     if (doc) setHeader({ partner: doc.partner ?? '', recipient: doc.recipient ?? '', comment: doc.comment ?? '' });
@@ -84,8 +95,7 @@ export default function DocumentScreen() {
   const later = (fn: () => void) => setTimeout(fn, Platform.OS === 'ios' ? 450 : 50);
   const openQty = (r: QtyReq) => later(() => setQtyReq(r));
   const openStock = (r: StockReq) => later(() => setStockReq(r));
-  const openPlace = (cb: (p: PickedPlace) => void) => later(() => setPlacePick(() => cb));
-  const openItem = (r: { barcode?: string }) => later(() => setItemPick(r));
+  const openItem = (r: { barcode?: string; purpose?: 'plan' }) => later(() => setItemPick(r));
   const saveHeader = () => draft && !isReturn && api.updateDocumentHeader(id, header).catch(showError);
 
   const freeQty = (r: StockRow) =>
@@ -93,21 +103,31 @@ export default function DocumentScreen() {
       .filter((l) => l.item_id === r.item_id && (r.box_id ? l.box_id === r.box_id : !l.box_id && l.cell_id === r.cell_id))
       .reduce((a, l) => a + l.qty, 0);
 
-  const placeToLine = (p: PickedPlace | null) => (p ? (p.kind === 'box' ? { boxId: p.boxId } : { cellId: p.cellId }) : {});
-
   // ------------------------------------------------------------ приход
 
-  async function receiveItem(item: Item) {
+  /** Цветная отметка по товару после скана: сколько принято из задания. */
+  async function feedbackFor(item: Item): Promise<ScanFeedback> {
+    const [plan2, lines2] = await Promise.all([api.receiptPlan(id), api.listLines(id)]);
+    const row = receiptCheck(plan2, lines2).rows.find((x) => x.item_id === item.id);
+    if (!plan2.length || !row) return { ok: true, tone: 'green', text: `✓ ${item.name}: принято ${formatQty(row?.fact ?? 0)} ${item.unit}` };
+    const tone = TONE[row.status];
+    if (row.status === 'extra') return { ok: true, tone, text: `${item.name}\nнет в задании · принято ${formatQty(row.fact)} ${item.unit}` };
+    return { ok: true, tone, text: `${item.name}\n${formatQty(row.fact)} из ${formatQty(row.plan)} ${item.unit} — ${CHECK_LABEL[row.status].toLowerCase()}` };
+  }
+
+  /** Приёмка: всё принятое падает в буферную ячейку склада, раскладка — перемещением. */
+  async function receiveItem(item: Item): Promise<ScanFeedback | void> {
     if (quick) {
-      await api.addLine(id, { itemId: item.id, qty: 1, ...placeToLine(target) });
+      await api.addLine(id, { itemId: item.id, qty: 1 });
       reload();
-      return;
+      return feedbackFor(item);
     }
+    const row = check?.rows.find((x) => x.item_id === item.id);
     openQty({
-      title: `${item.name}\n→ ${target ? target.label : 'буферная ячейка'}`,
+      title: `${item.name}\n→ буферная ячейка${row && row.plan ? `\nпо заданию ${formatQty(row.plan)}, принято ${formatQty(row.fact)}` : ''}`,
       unit: item.unit,
       submit: async (qty) => {
-        await api.addLine(id, { itemId: item.id, qty, ...placeToLine(target) });
+        await api.addLine(id, { itemId: item.id, qty });
       },
     });
   }
@@ -162,23 +182,16 @@ export default function DocumentScreen() {
 
   // ------------------------------------------------------------ сканирование
 
-  async function onScan(code: string): Promise<boolean> {
+  async function onScan(code: string): Promise<boolean | ScanFeedback> {
     const r = await api.resolveScan(code);
     if (r.type !== 'none') setResume(true);
     if (isReceipt) {
-      if (r.type === 'cell') {
-        setTarget({ kind: 'cell', cellId: r.cell.id, label: r.cell.address });
-        return true;
-      }
-      if (r.type === 'box') {
-        const b = await api.getBox(r.box.id);
-        setTarget({ kind: 'box', boxId: r.box.id, cellId: r.box.cell_id, label: `${b?.address ?? '—'} · ${r.box.code}` });
-        return true;
+      if (r.type === 'cell' || r.type === 'box' || r.type === 'rack') {
+        return { ok: false, tone: 'yellow', text: 'Место выбирать не нужно: товар принимается в буферную ячейку. Сканируйте ШК товара.' };
       }
       if (r.type === 'item') {
         if (quick) {
-          await receiveItem(r.item);
-          return true; // сканер остаётся открытым — сканируйте дальше
+          return (await receiveItem(r.item)) ?? true; // сканер остаётся открытым — сканируйте дальше
         }
         setScanOpen(false);
         await receiveItem(r.item);
@@ -258,13 +271,10 @@ export default function DocumentScreen() {
             openQty({ title: l.item_name, unit: l.unit, max, initial: l.qty, submit: (qty) => api.updateLine(l.id, { qty }) });
           },
         },
-        {
-          label: isReceipt ? 'Изменить место' : 'Взять из другого места',
+        ...(isReceipt ? [] : [{
+          label: 'Взять из другого места',
           onPress: async () => {
-            if (isReceipt) {
-              openPlace((p) => api.updateLine(l.id, { place: p.kind === 'box' ? { boxId: p.boxId } : { cellId: p.cellId } })
-                .then(reload).catch(showError));
-            } else {
+            {
               const rows = await api.stockByItem(l.item_id);
               openStock({
                 title: `Откуда берём «${l.item_name}»?`, rows,
@@ -275,7 +285,7 @@ export default function DocumentScreen() {
               });
             }
           },
-        },
+        }]),
         { label: 'Удалить строку', danger: true, onPress: () => api.deleteLine(l.id).then(reload).catch(showError) },
       ],
     });
@@ -297,8 +307,49 @@ export default function DocumentScreen() {
     }
   }
 
-  const postReceipt = () => run(() => api.postReceipt(id),
-    `${doc.number}: ${isReturn ? 'ТМЦ приняты на склад (буферная ячейка), отметки сохранены' : 'остатки обновлены'}`);
+  const doPostReceipt = () => run(() => api.postReceipt(id),
+    `${doc.number}: ${isReturn ? 'ТМЦ приняты на склад (буферная ячейка), отметки сохранены' : 'товар принят в буферную ячейку, разложите его перемещением'}`);
+  const postReceipt = () => {
+    if (!check || check.matched) return doPostReceipt();
+    const list = check.rows.filter((x) => x.status !== 'ok').slice(0, 8)
+      .map((x) => `${x.item_name}: ${formatQty(x.fact)} из ${formatQty(x.plan)} (${CHECK_LABEL[x.status].toLowerCase()})`).join('\n');
+    confirm('Есть расхождения с заданием',
+      `Недостача: ${check.short}, излишек: ${check.over}, нет в задании: ${check.extra}\n\n${list}\n\nПровести по факту отсканированного?`,
+      doPostReceipt, 'Провести по факту');
+  };
+
+  /** Действия по позиции задания на приёмку. */
+  function planActions(row: CheckRow) {
+    if (!canEdit) return;
+    const item = { id: row.item_id, name: row.item_name, unit: row.unit } as Item;
+    setMenu({
+      title: row.item_name,
+      subtitle: `${row.sku} · принято ${formatQty(row.fact)} из ${formatQty(row.plan)} ${row.unit}`,
+      actions: [
+        {
+          label: 'Добавить количество',
+          onPress: () => { setResume(false); openQty({ title: `${row.item_name}\n→ буферная ячейка`, unit: row.unit,
+            submit: async (qty) => { await api.addLine(id, { itemId: item.id, qty }); } }); },
+        },
+        {
+          label: 'Принято всего: указать количество',
+          onPress: () => openQty({ title: `${row.item_name}\nпринято всего`, unit: row.unit, initial: row.fact || row.plan,
+            submit: (qty) => api.setFactQty(id, row.item_id, qty) }),
+        },
+        ...(row.plan > 0 && row.fact !== row.plan ? [{ label: `Принять по заданию (${formatQty(row.plan)})`,
+          onPress: () => api.setFactQty(id, row.item_id, row.plan).then(reload).catch(showError) }] : []),
+        ...(row.fact > 0 ? [{ label: 'Обнулить принятое', danger: true,
+          onPress: () => api.setFactQty(id, row.item_id, 0).then(reload).catch(showError) }] : []),
+        ...(perms.operate ? [{
+          label: 'Изменить количество в задании',
+          onPress: () => openQty({ title: `${row.item_name}\nожидается по заданию`, unit: row.unit, initial: row.plan || row.fact,
+            submit: (qty) => api.setPlanQty(id, row.item_id, qty) }),
+        }] : []),
+        ...(perms.operate && row.plan > 0 ? [{ label: 'Убрать из задания', danger: true,
+          onPress: () => api.setPlanQty(id, row.item_id, 0).then(reload).catch(showError) }] : []),
+      ],
+    });
+  }
 
   const postedNote = 'Документ сохранён: «Ещё → Документы → Проведённые».';
   const writeOff = () => confirm('Провести расходный ордер?',
@@ -342,7 +393,7 @@ export default function DocumentScreen() {
         <Card>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <View style={{ flex: 1 }}>
-              <H1>{DOC_TITLES[doc.type]}</H1>
+              <H1>{DOC_TITLES[doc.type]}{isReceipt && (plan.length || doc.mode === 'plan') ? ' · задание на приёмку' : ''}</H1>
               <Muted>№ {doc.number} от {doc.doc_date.slice(0, 16)}{subtitle ? ` · ${subtitle}` : ''}</Muted>
               <Muted>Составил: {doc.created_by_name}</Muted>
               {doc.posted_at ? <Muted>Провёл: {doc.posted_by_name}, {doc.posted_at}{modeLabel ? ` · ${modeLabel}` : ''}</Muted> : null}
@@ -375,19 +426,43 @@ export default function DocumentScreen() {
 
         {canEdit && isReceipt ? (
           <Card style={{ backgroundColor: colors.successSoft }}>
-            <Muted>Размещать в:</Muted>
-            <Text style={{ fontSize: 16, fontWeight: '600', color: colors.text, marginVertical: 4 }}>
-              {target ? target.label : 'буферная ячейка склада (разложите потом перемещением)'}
-            </Text>
-            <View style={s.rowWrap}>
-              <Button title="Выбрать место" variant="ghost" style={{ flex: 1 }} onPress={() => openPlace((p) => setTarget(p))} />
-              {target ? <Button title="В буфер" variant="ghost" style={{ flex: 1 }} onPress={() => setTarget(null)} /> : null}
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 }}>
-              <Text style={{ color: colors.text, flex: 1 }}>Быстрый режим: каждый скан = +1 шт</Text>
+            <Text style={{ color: colors.text }}>Весь принятый товар попадает в <Text style={{ fontWeight: '700' }}>буферную ячейку</Text> склада — разложите его потом перемещением (ТСД или ПК).</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
+              <Text style={{ color: colors.text, flex: 1 }}>Быстрый режим: 1 скан = +1 шт</Text>
               <Switch value={quick} onValueChange={setQuick} />
             </View>
           </Card>
+        ) : null}
+
+        {check ? (
+          <Section title={`Задание на приёмку · принято ${formatQty(check.fact)} из ${formatQty(check.plan)}`}>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+              <Badge text={`Сошлось: ${check.ok}`} tone="success" />
+              <Badge text={`Недостача: ${check.short}`} tone="danger" />
+              <Badge text={`Излишек: ${check.over + check.extra}`} tone="warn" />
+            </View>
+            <View style={{ borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: colors.border }}>
+              {check.rows.map((row) => {
+                const c = ROW_BG[row.status];
+                return (
+                  <Pressable key={row.item_id} disabled={!canEdit} onPress={() => planActions(row)}
+                    style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', padding: 12, backgroundColor: c.bg,
+                      borderLeftWidth: 6, borderLeftColor: c.border, borderBottomWidth: 1, borderBottomColor: '#fff' }, pressed && { opacity: 0.8 }]}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 15, fontWeight: '600', color: colors.text }}>{row.item_name}</Text>
+                      <Text style={{ fontSize: 12, color: colors.muted }}>{row.sku}{row.barcode ? ` · ШК ${row.barcode}` : ''}</Text>
+                      <Text style={{ fontSize: 12, color: c.fg, fontWeight: '600' }}>
+                        {CHECK_LABEL[row.status]}{row.status === 'short' ? ` ${formatQty(-row.diff)}` : row.status === 'over' ? ` +${formatQty(row.diff)}` : ''}
+                      </Text>
+                    </View>
+                    <Text style={{ fontSize: 18, fontWeight: '700', color: c.fg }}>
+                      {formatQty(row.fact)}<Text style={{ fontSize: 13, color: colors.muted }}> / {formatQty(row.plan)} {row.unit}</Text>
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Section>
         ) : null}
 
         {canEdit && isFact && openBox ? (
@@ -403,7 +478,7 @@ export default function DocumentScreen() {
           </Card>
         ) : null}
 
-        <Section title={`Строки · ${lines.length} поз. · ${formatQty(total)} ед.`}>
+        {check ? null : <Section title={`Строки · ${lines.length} поз. · ${formatQty(total)} ед.`}>
           <View style={{ borderRadius: 12, overflow: 'hidden' }}>
             {lines.length ? lines.map((l, i) => (
               <ListRow
@@ -419,9 +494,9 @@ export default function DocumentScreen() {
                 right={`${formatQty(l.qty)} ${l.unit}`}
                 onPress={(canEdit || (isReturn && draft)) ? () => lineActions(l) : undefined}
               />
-            )) : <Empty text={isFact ? 'Отсканируйте короб, ячейку или товар' : 'Добавьте товары'} />}
+            )) : <Empty text={isFact ? 'Отсканируйте короб, ячейку или товар' : isReceipt ? 'Отсканируйте ШК товара или добавьте товар' : 'Добавьте товары'} />}
           </View>
-        </Section>
+        </Section>}
 
         {data.custody.length ? (
           <Section title={`Выдано · ${byHolder.size} чел.`} action={
@@ -452,8 +527,18 @@ export default function DocumentScreen() {
               <Button title="Выбрать из остатков" variant="secondary" icon="≣"
                 onPress={() => { setResume(false); openStock({ title: 'Что берём?', pick: issueFromRow }); }} />
             ) : (
-              <Button title="Добавить товар из списка" variant="secondary" icon="+" onPress={() => { setResume(false); openItem({}); }} />
+              <Button title={isReceipt ? 'Принять товар из списка (количеством)' : 'Добавить товар из списка'} variant="secondary" icon="+"
+                onPress={() => { setResume(false); openItem({}); }} />
             )}
+            {isReceipt && perms.operate ? (
+              <Button title="Добавить позицию в задание на приёмку" variant="secondary" icon="☰"
+                onPress={() => { setResume(false); openItem({ purpose: 'plan' }); }} />
+            ) : null}
+            {check && check.rows.some((x) => x.status === 'short') ? (
+              <Button title="Принять всё по заданию (без сканирования)" variant="secondary" icon="✓"
+                onPress={() => confirm('Принять всё по заданию?', 'Недостающее количество будет записано как принятое.',
+                  () => api.fillFromPlan(id).then(reload).catch(showError), 'Принять')} />
+            ) : null}
             <Button title="Удалить черновик" variant="danger"
               onPress={() => confirm('Удалить документ?', doc.number, async () => {
                 try {
@@ -467,14 +552,14 @@ export default function DocumentScreen() {
         ) : null}
 
         <Button title={isIssue && draft ? 'Печать ордера / лист подбора' : 'Печать документа'} icon="⎙" variant="secondary"
-          disabled={!lines.length} onPress={() => setFormJob({
+          disabled={!lines.length && !plan.length} onPress={() => setFormJob({
             title: `${DOC_TITLES[doc.type]} № ${doc.number}`,
             subtitle: 'Печатная форма A4 по образцу 1С',
             variants: [{
               build: async (ctx) => documentForm(doc, lines, ctx, isIssue ? {
                 custody: data?.custody,
                 allocations: !data?.custody?.length ? await api.listAllocations(id) : undefined,
-              } : {}),
+              } : { plan }),
             }],
           })} />
         {!draft && doc.type !== 'move' && (perms.operate || isReturn) ? (
@@ -503,7 +588,7 @@ export default function DocumentScreen() {
         onScan={onScan}
         title={isReceipt ? 'Приёмка' : 'Изъятие'}
         hint={isReceipt
-          ? `QR ячейки/короба — место размещения; ШК товара — ${quick ? '+1 шт' : 'добавить с количеством'}`
+          ? `ШК товара / коробки — ${quick ? '+1 шт за скан' : 'принять с количеством'} · всё в буферную ячейку`
           : isFact
             ? 'QR короба или ячейки — содержимое; ШК/QR товара — изъять (короб сканировать не обязательно)'
             : 'ШК/QR товара — добавить в заявку'}
@@ -511,15 +596,14 @@ export default function DocumentScreen() {
       <ItemPicker visible={itemPick !== null} newBarcode={itemPick?.barcode} allowCreate={isReceipt}
         onClose={() => setItemPick(null)}
         onPick={(item) => {
+          const purpose = itemPick?.purpose;
           setItemPick(null);
-          if (isReceipt) later(() => receiveItem(item).catch(showError));
+          if (purpose === 'plan') {
+            const row = check?.rows.find((x) => x.item_id === item.id);
+            openQty({ title: `${item.name}\nожидается по заданию`, unit: item.unit, initial: row?.plan || undefined,
+              submit: (qty) => api.setPlanQty(id, item.id, qty) });
+          } else if (isReceipt) later(() => { receiveItem(item).catch(showError); });
           else issuePlanItem(item);
-        }} />
-      <PlacePicker visible={placePick !== null} title="Куда разместить" onClose={() => setPlacePick(null)}
-        onPick={(p) => {
-          const cb = placePick;
-          setPlacePick(null);
-          cb?.(p);
         }} />
       <StockPicker visible={stockReq !== null} title={stockReq?.title} rows={stockReq?.rows}
         onClose={() => { setStockReq(null); setResume(false); }}

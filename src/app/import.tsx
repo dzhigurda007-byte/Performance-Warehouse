@@ -60,7 +60,7 @@ export default function ImportScreen() {
     <ScrollView style={s.screen} contentContainerStyle={s.content}>
       <Card>
         <Text style={{ fontWeight: '700', fontSize: 16, color: colors.text }}>
-          {kind === 'items' ? 'Номенклатура из Excel' : 'Приходный ордер из Excel'}
+          {kind === 'items' ? 'Номенклатура из Excel' : 'Задание на приёмку из Excel'}
         </Text>
         <Muted>Формат: первая строка — заголовки столбцов.</Muted>
         <Text style={{ fontFamily: 'monospace', color: colors.text, marginVertical: 8 }}>
@@ -69,8 +69,9 @@ export default function ImportScreen() {
         <Muted>
           {kind === 'items'
             ? 'Номенклатура — это справочник возможных наименований (как в 1С), а не товар на складе. Существующие артикулы обновятся.'
-            : 'Три столбца, как в номенклатуре, только вместо штрихкода — количество. Товар ищется по артикулу; новые артикулы будут добавлены в номенклатуру. ' +
-              'Создаётся черновик приходного ордера: проверьте его и проведите — товар окажется в буферной ячейке склада, затем разложите его перемещением.'}
+            : 'Три столбца, как в номенклатуре, только вместо штрихкода — количество (сколько ожидается). Товар ищется по артикулу; новые артикулы будут добавлены в номенклатуру. ' +
+              'Создаётся задание на приёмку: кладовщик сканирует ШК на ТСД, позиции подсвечиваются красным (меньше), зелёным (сошлось), жёлтым (больше). ' +
+              'После проведения товар окажется в буферной ячейке склада.'}
         </Muted>
         <Button title={file ? `Файл: ${file.name}` : 'Выбрать файл .xlsx'} variant="secondary" icon="⊞" onPress={choose} />
       </Card>
@@ -91,7 +92,7 @@ export default function ImportScreen() {
             ))}
           </View>
           {file.rows.length > 30 ? <Muted>… и ещё {file.rows.length - 30}</Muted> : null}
-          <Button title={kind === 'items' ? 'Загрузить в номенклатуру' : 'Создать приходный ордер'} onPress={load} busy={busy}
+          <Button title={kind === 'items' ? 'Загрузить в номенклатуру' : 'Создать задание на приёмку'} onPress={load} busy={busy}
             disabled={!file.rows.length} />
         </Section>
       ) : null}

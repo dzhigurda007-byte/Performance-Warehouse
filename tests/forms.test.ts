@@ -8,7 +8,7 @@ const doc = (o: Partial<DocumentRow>): DocumentRow => ({
   id: 1, type: 'receipt', mode: 'fact', number: 'ПО-000012', doc_date: '2026-10-06 10:00:00', status: 'posted',
   partner: 'ООО Поставщик', recipient: null, comment: null, created_by: 1, created_by_name: 'Иванов И.И.',
   posted_by: 1, posted_by_name: 'Петров П.П.', posted_at: '2026-10-06 11:30:00', lines_count: 1, post_mode: null,
-  source: 'manual', base_doc_id: null, base_doc_number: null, warehouse_id: 1, warehouse_name: 'Основной', ...o,
+  source: 'manual', base_doc_id: null, base_doc_number: null, warehouse_id: 1, warehouse_name: 'Основной', plan_count: 0, ...o,
 });
 const line = (o: Partial<DocLine>): DocLine => ({
   id: 1, doc_id: 1, item_id: 1, sku: 'KOMB', item_name: 'Комбайн <Bosch>', unit: 'шт', barcode: null, qty: 3,
@@ -56,4 +56,13 @@ test('ведомость остатков по группам и разбор п
   assert.equal(parseDateInput(''), null);
   assert.equal(parseQtyInput('1,5'), 1.5);
   assert.equal(parseQtyInput('abc'), undefined);
+});
+
+test('приходный ордер по заданию: план, принято, отклонение', () => {
+  const plan = [{ item_id: 1, sku: 'KOMB', item_name: 'Комбайн', unit: 'шт', barcode: null, qty: 3 }];
+  const f = documentForm(doc({ mode: 'plan', plan_count: 1 }), [line({ qty: 2, address: null })], {}, { plan });
+  assert.match(f.html, /по заданию на приёмку/);
+  assert.match(f.html, /отклонение/);
+  assert.match(f.html, /недостача/);
+  assert.match(f.html, />-1</);
 });

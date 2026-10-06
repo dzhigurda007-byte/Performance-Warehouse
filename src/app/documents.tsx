@@ -7,10 +7,11 @@ import type { DocumentRow } from '../core/types';
 import { useApi, usePerms } from '../lib/backend';
 import { DOC_SOURCE_LABEL, DOC_TITLES, docSubtitle } from '../lib/docs';
 
-type Filter = 'all' | 'drafts' | 'posted' | 'receipt' | 'issue' | 'returns' | 'move';
+type Filter = 'all' | 'tasks' | 'drafts' | 'posted' | 'receipt' | 'issue' | 'returns' | 'move';
 
 const QUERY: Record<Filter, Parameters<ReturnType<typeof useApi>['listDocuments']>[0]> = {
   all: {},
+  tasks: { type: 'receipt', status: 'draft', mode: 'plan' },
   drafts: { status: 'draft' },
   posted: { status: 'posted' },
   receipt: { type: 'receipt' },
@@ -36,11 +37,12 @@ export default function DocsScreen() {
   return (
     <View style={[s.screen, { padding: 16 }]}>
       {p.operate ? (
-        <Button title="Приходный ордер из Excel (Артикул · Наименование · Количество)" icon="⊞" variant="secondary"
+        <Button title="Задание на приёмку из Excel (Артикул · Наименование · Количество)" icon="⊞" variant="secondary"
           onPress={() => router.push({ pathname: '/import', params: { kind: 'receipt' } })} />
       ) : null}
       <Chips value={filter} onChange={setFilter} options={[
         { value: 'all' as Filter, label: 'Все' },
+        { value: 'tasks' as Filter, label: 'Задания на приёмку' },
         { value: 'drafts' as Filter, label: 'Черновики' },
         { value: 'posted' as Filter, label: 'Проведённые' },
         { value: 'receipt' as Filter, label: 'Приход' },

@@ -159,6 +159,8 @@ export interface DocumentRow {
   base_doc_number: string | null;
   warehouse_id: number | null;
   warehouse_name: string | null;
+  /** Позиций в задании на приёмку (0 — обычный ордер). */
+  plan_count: number;
 }
 
 export interface DocLine {

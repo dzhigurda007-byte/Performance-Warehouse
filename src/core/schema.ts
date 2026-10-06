@@ -231,6 +231,16 @@ const MIGRATIONS: string[] = [
   `,
   // v3: поиск по названию без учёта регистра для кириллицы (заполняется из приложения)
   `ALTER TABLE items ADD COLUMN search_name TEXT;`,
+  // v4: задание на приёмку — сколько ожидается по каждому товару (факт — строки ордера)
+  `
+  CREATE TABLE receipt_plan (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    item_id INTEGER NOT NULL REFERENCES items(id),
+    qty REAL NOT NULL CHECK (qty > 0),
+    UNIQUE (doc_id, item_id)
+  );
+  `,
 ];
 
 export async function migrate(db: DB): Promise<void> {
