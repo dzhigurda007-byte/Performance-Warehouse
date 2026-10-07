@@ -45,6 +45,7 @@ function RootStack() {
         <Stack.Screen name="doc/allocate" options={{ title: 'Кому выдать' }} />
         <Stack.Screen name="upd/[id]" options={{ title: 'УПД' }} />
         <Stack.Screen name="ref/[kind]/[id]" options={{ title: 'Справочник' }} />
+        <Stack.Screen name="tools/boxes" options={{ title: 'Генератор коробов' }} />
         <Stack.Screen name="documents" options={{ title: 'Документы' }} />
         <Stack.Screen name="history" options={{ title: 'История движений' }} />
         <Stack.Screen name="move" options={{ title: 'Перемещение' }} />

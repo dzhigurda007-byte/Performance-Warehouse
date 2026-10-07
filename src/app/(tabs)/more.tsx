@@ -30,6 +30,14 @@ export default function MoreScreen() {
         </Section>
       ) : null}
 
+      {p.operate ? (
+        <Section title="Инструменты">
+          <View style={{ borderRadius: 12, overflow: 'hidden' }}>
+            {link('Генератор коробов', 'Создать N коробов с номерами и QR, распечатать этикетки', '/tools/boxes')}
+          </View>
+        </Section>
+      ) : null}
+
       {p.operate || p.invite || p.administer ? (
         <Section title="Люди и доступ">
           <View style={{ borderRadius: 12, overflow: 'hidden' }}>

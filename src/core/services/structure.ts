@@ -224,6 +224,42 @@ export const structure = {
     return { id: r.lastInsertRowId, code };
   },
 
+  /**
+   * Генератор коробов: создать сразу count коробов со сквозной нумерацией BX-000001…
+   * Без ячейки — «свободные» короба: этикетки печатаются и клеятся заранее, в ячейку короб
+   * ставится потом (перемещение короба). Возвращает созданные коды по порядку.
+   */
+  async createBoxes(ctx: Ctx, opts: { count: number; name?: string | null; cellId?: number | null }) {
+    need(ctx, can.operate);
+    const count = Math.floor(Number(opts.count));
+    if (!(count >= 1 && count <= 1000)) throw new BusinessError('Количество коробов — от 1 до 1000 за раз');
+    if (opts.cellId && !(await ctx.db.getFirstAsync('SELECT id FROM cells WHERE id = ?', opts.cellId))) {
+      throw new BusinessError('Ячейка не найдена');
+    }
+    const out: { id: number; code: string }[] = [];
+    await inTransaction(ctx.db, async (t) => {
+      for (let i = 0; i < count; i++) {
+        const code = formatBoxCode(await nextSeq(t, 'seq_box'));
+        const r = await t.runAsync('INSERT INTO boxes(code, name, cell_id) VALUES(?, ?, ?)', code, emptyToNull(opts.name ?? ''), opts.cellId ?? null);
+        out.push({ id: r.lastInsertRowId, code });
+      }
+    });
+    return out;
+  },
+
+  /** Короба для повторной печати: свободные (без ячейки) или все, свежие сверху. */
+  listBoxes(ctx: Ctx, f: { unplaced?: boolean; search?: string } = {}) {
+    need(ctx, can.operate);
+    const q = (f.search ?? '').trim();
+    return ctx.db.getAllAsync<Box & { address: string | null; positions: number }>(`
+      SELECT b.*, ${ADDRESS_SQL} AS address,
+        (SELECT COUNT(DISTINCT s.item_id) FROM stock s WHERE s.box_id = b.id AND s.qty > 0) AS positions
+      FROM boxes b
+      LEFT JOIN cells c ON c.id = b.cell_id LEFT JOIN racks r ON r.id = c.rack_id LEFT JOIN warehouses w ON w.id = r.warehouse_id
+      WHERE (? = 0 OR b.cell_id IS NULL) AND (? = '' OR b.code LIKE ? OR IFNULL(b.name, '') LIKE ?)
+      ORDER BY b.id DESC LIMIT 1000`, f.unplaced ? 1 : 0, q, `%${q}%`, `%${q}%`);
+  },
+
   async renameBox(ctx: Ctx, id: number, name: string) {
     need(ctx, can.operate);
     await ctx.db.runAsync('UPDATE boxes SET name = ? WHERE id = ?', emptyToNull(name), id);

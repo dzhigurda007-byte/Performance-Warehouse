@@ -11,6 +11,7 @@ import { stockItems, stockTree } from '../src/core/stockTree';
 import { receiptCheck } from '../src/core/receiptCheck';
 import { updTotals } from '../src/core/upd';
 import { contractTitle } from '../src/core/refs';
+import { boxQr } from '../src/core/codes';
 
 let db: DB;
 const people: Record<string, SessionUser> = {};
@@ -539,4 +540,29 @@ test('реквизиты из прежних настроек переносят
   await migrate(fresh);
   const org = await fresh.getFirstAsync<{ name: string; inn: string; is_default: number }>('SELECT name, inn, is_default FROM organizations');
   assert.deepEqual({ ...org }, { name: 'ООО Старое', inn: '7701234567', is_default: 1 });
+});
+
+test('генератор коробов: N коробов со сквозной нумерацией, свободные, потом в ячейку', async () => {
+  const K = as('keeper');
+  const first = await K.createBox(cellA);
+  const list = await K.createBoxes({ count: 3, name: 'Поставка 07.10' });
+  const num = (code: string) => Number(code.slice(3));
+  assert.deepEqual(list.map((b) => num(b.code) - num(first.code)), [1, 2, 3]);
+  assert.match(list[0].code, /^BX-\d{6}$/);
+  const free = await K.listBoxes({ unplaced: true });
+  assert.deepEqual(free.map((b) => b.code).sort(), list.map((b) => b.code).sort());
+  assert.ok(free.every((b) => b.cell_id === null && b.name === 'Поставка 07.10'));
+  assert.equal((await K.listBoxes({ search: list[1].code })).length, 1);
+  // QR короба распознаётся
+  const r = await K.resolveScan(boxQr(list[0].code));
+  assert.equal(r.type === 'box' && r.box.id, list[0].id);
+  // поставить свободный короб в ячейку
+  await K.moveBox(list[0].id, cellB);
+  assert.equal((await K.listBoxes({ unplaced: true })).length, 2);
+  // в ячейку сразу
+  const inCell = await K.createBoxes({ count: 2, cellId: cellA });
+  assert.ok((await K.listBoxesInCell(cellA)).some((b) => b.id === inCell[1].id));
+  await assert.rejects(K.createBoxes({ count: 0 }), /от 1 до 1000/);
+  await assert.rejects(K.createBoxes({ count: 1001 }), /от 1 до 1000/);
+  await assert.rejects(as('emp').createBoxes({ count: 1 }), /прав|доступ/i);
 });

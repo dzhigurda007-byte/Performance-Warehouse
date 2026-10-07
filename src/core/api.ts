@@ -40,6 +40,8 @@ export const api = {
   findBoxByCode: structure.findBoxByCode,
   listBoxesInCell: structure.listBoxesInCell,
   createBox: structure.createBox,
+  createBoxes: structure.createBoxes,
+  listBoxes: structure.listBoxes,
   renameBox: structure.renameBox,
   deleteBox: structure.deleteBox,
   moveBox: structure.moveBox,
