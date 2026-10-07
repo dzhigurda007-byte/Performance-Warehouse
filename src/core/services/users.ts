@@ -110,7 +110,21 @@ export const auth = {
 export interface Settings {
   custodyEnabled: boolean;
   orgName: string;
+  /** Реквизиты продавца / грузоотправителя для УПД. */
+  orgInn: string;
+  orgKpp: string;
+  orgAddress: string;
+  orgDirector: string;
+  orgAccountant: string;
 }
+
+const ORG_KEYS = {
+  orgInn: 'org_inn',
+  orgKpp: 'org_kpp',
+  orgAddress: 'org_address',
+  orgDirector: 'org_director',
+  orgAccountant: 'org_accountant',
+} as const;
 
 export const users = {
   me: (ctx: Ctx) => ctx.db.getFirstAsync<UserRow>(`${USER_SELECT} WHERE u.id = ?`, ctx.user.id),
@@ -226,6 +240,11 @@ export const users = {
     return {
       custodyEnabled: (await getMeta(ctx.db, SETTING_CUSTODY)) === '1',
       orgName: (await getMeta(ctx.db, 'org_name')) ?? '',
+      orgInn: (await getMeta(ctx.db, ORG_KEYS.orgInn)) ?? '',
+      orgKpp: (await getMeta(ctx.db, ORG_KEYS.orgKpp)) ?? '',
+      orgAddress: (await getMeta(ctx.db, ORG_KEYS.orgAddress)) ?? '',
+      orgDirector: (await getMeta(ctx.db, ORG_KEYS.orgDirector)) ?? '',
+      orgAccountant: (await getMeta(ctx.db, ORG_KEYS.orgAccountant)) ?? '',
     };
   },
 
@@ -233,5 +252,13 @@ export const users = {
     need(ctx, can.administer, 'изменение настроек');
     if (s.custodyEnabled !== undefined) await setMeta(ctx.db, SETTING_CUSTODY, s.custodyEnabled ? '1' : '0');
     if (s.orgName !== undefined) await setMeta(ctx.db, 'org_name', s.orgName.trim());
+    for (const [k, meta] of Object.entries(ORG_KEYS) as [keyof typeof ORG_KEYS, string][]) {
+      const v = s[k];
+      if (v === undefined) continue;
+      const t = v.trim();
+      if (k === 'orgInn' && t && !/^\d{10}(\d{2})?$/.test(t)) throw new BusinessError('ИНН — 10 цифр (организация) или 12 цифр (ИП)');
+      if (k === 'orgKpp' && t && !/^\d{9}$/.test(t)) throw new BusinessError('КПП — 9 цифр');
+      await setMeta(ctx.db, meta, t);
+    }
   },
 };

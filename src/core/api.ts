@@ -6,6 +6,7 @@ import { items } from './services/items';
 import { stockQueries } from './services/stock';
 import { structure } from './services/structure';
 import { users } from './services/users';
+import { upd } from './services/upd';
 import { can } from './roles';
 import { need } from './ctx';
 import type { StockReportFilter } from './types';
@@ -91,6 +92,11 @@ export const api = {
   unpostDocument: documents.unpost,
   moveStock: documents.moveStock,
   moveMany: documents.moveMany,
+
+  // УПД по расходному ордеру
+  getUpd: upd.get,
+  saveUpd: upd.save,
+  updBuyers: upd.buyers,
 
   // выдача под ответственность
   myCustody: custody.mine,

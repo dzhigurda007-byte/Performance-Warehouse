@@ -4,7 +4,6 @@ import { FlatList, View } from 'react-native';
 import { Chips } from '../../components/Chips';
 import { Scanner } from '../../components/Scanner';
 import { Badge, Button, Empty, ListRow, Muted, SearchBox, confirm, notify, s, showError, useFocusLoad } from '../../components/ui';
-import { formatQty } from '../../core/codes';
 import { useApi, usePerms } from '../../lib/backend';
 
 /**
@@ -97,7 +96,7 @@ export default function ItemsScreen() {
             title={item.name}
             subtitle={`${item.sku}${item.barcode ? ' · ШК ' + item.barcode : ''}${item.group_name ? ' · ' + item.group_name : ''}`}
             left={selecting ? <Badge text={picked.has(item.id) ? '✓' : ' '} tone={picked.has(item.id) ? 'danger' : 'muted'} /> : undefined}
-            right={`${formatQty(item.total)} ${item.unit}`}
+            right={item.unit}
             onPress={() => (selecting ? toggle(item.id) : router.push({ pathname: '/item/[id]', params: { id: String(item.id) } }))}
             onLongPress={p.manageItems ? () => { setSelecting(true); toggle(item.id); } : undefined}
           />

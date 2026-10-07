@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, colors } from './ui';
+import { scanSound } from '../lib/beep';
 
 /**
  * Сканер: камера телефона (QR, EAN-13/8, Code128/39, DataMatrix, UPC)
@@ -44,6 +45,7 @@ export function Scanner({
   /** Последний код, который видит камера (наведение); засчитывается только по кнопке «СКАН». */
   const seen = useRef<{ code: string; at: number } | null>(null);
   const [inView, setInView] = useState<string | null>(null);
+  const [sound, setSound] = useState(scanSound.enabled);
 
   useEffect(() => {
     if (visible) {
@@ -52,6 +54,7 @@ export function Scanner({
       lock.current = false;
       seen.current = null;
       setInView(null);
+      scanSound.ready().then(() => setSound(scanSound.enabled)).catch(() => undefined);
     }
   }, [visible]);
 
@@ -79,6 +82,7 @@ export function Scanner({
     const cur = seen.current;
     if (!cur || Date.now() - cur.at > 1000) {
       setMessage({ ok: false, tone: 'red', text: 'Код не в кадре — наведите камеру на ШК или QR и нажмите «СКАН»' });
+      scanSound.play('error');
       return;
     }
     handle(cur.code, 'camera');
@@ -98,7 +102,10 @@ export function Scanner({
       const res = await onScan(c);
       if (typeof res === 'object') setMessage(res);
       else setMessage(res ? { text: `✓ ${c}`, ok: true } : { text: `Не распознано: ${c}`, ok: false });
+      const good = typeof res === 'object' ? res.ok && res.tone !== 'red' : res;
+      scanSound.play(good ? 'ok' : 'error');
     } catch (e) {
+      scanSound.play('error');
       setMessage({ ok: false, tone: 'red', text: e instanceof Error ? e.message : String(e) });
     } finally {
       lock.current = false;
@@ -113,9 +120,19 @@ export function Scanner({
         <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
         <View style={st.header}>
           <Text style={st.title}>{title}</Text>
-          <Pressable onPress={onClose} hitSlop={12}>
-            <Text style={st.close}>Закрыть</Text>
-          </Pressable>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 18 }}>
+            <Pressable hitSlop={12} onPress={() => {
+              const v = !sound;
+              setSound(v);
+              scanSound.setEnabled(v).catch(() => undefined);
+              if (v) scanSound.play('ok');
+            }}>
+              <Text style={{ fontSize: 22 }}>{sound ? '🔊' : '🔇'}</Text>
+            </Pressable>
+            <Pressable onPress={onClose} hitSlop={12}>
+              <Text style={st.close}>Закрыть</Text>
+            </Pressable>
+          </View>
         </View>
         <View style={{ flex: 1 }}>
           {perm?.granted ? (

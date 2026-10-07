@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { flattenTree, parseDateInput, parseQtyInput, stockTree } from '../src/core/stockTree';
 import type { DocLine, DocumentRow, ItemGroup, StockReportRow } from '../src/core/types';
 import { documentForm, stockReportForm } from '../src/lib/docForms';
+import { updForm } from '../src/lib/updForm';
 
 const doc = (o: Partial<DocumentRow>): DocumentRow => ({
   id: 1, type: 'receipt', mode: 'fact', number: 'ПО-000012', doc_date: '2026-10-06 10:00:00', status: 'posted',
@@ -65,4 +66,25 @@ test('приходный ордер по заданию: план, принят�
   assert.match(f.html, /отклонение/);
   assert.match(f.html, /недостача/);
   assert.match(f.html, />-1</);
+});
+
+test('печатная форма УПД: реквизиты, табличная часть, итоги', () => {
+  const data = {
+    status: 1 as const, number: 'РО-000003', date: '2026-10-07', buyer: { name: 'ООО <Ромашка>', inn: '7712345678', kpp: '771201001', address: 'Москва' },
+    consigneeSame: true, consignee: { name: '', address: '' }, basis: 'Договор № 7', paymentDoc: '', shipDate: '2026-10-07',
+    vat: 22 as const, priceWithVat: true, passedBy: 'Петров', receivedBy: 'Сидоров',
+    lines: [{ item_id: 1, sku: 'KOMB', name: 'Комбайн', unit: 'шт', qty: 2, price: 1220 }],
+  };
+  const f = updForm(doc({ type: 'issue', number: 'РО-000003' }), data,
+    { name: 'ООО Склад', inn: '7701234567', kpp: '770101001', address: 'Подольск', director: 'Иванов', accountant: 'Смирнова' });
+  assert.equal(f.fileName, 'УПД РО-000003');
+  assert.match(f.html, /size: A4 landscape/);
+  assert.match(f.html, /Счёт-фактура № РО-000003 от «07» октября 2026 г\./);
+  assert.match(f.html, /7701234567\/770101001/);
+  assert.match(f.html, /ООО &lt;Ромашка&gt;/);
+  assert.match(f.html, /Российский рубль, 643/);
+  assert.match(f.html, />796</);
+  assert.match(f.html, /2 000,00/); // без НДС
+  assert.match(f.html, /440,00/); // НДС 22%
+  assert.match(f.html, /2 440,00/); // с НДС
 });

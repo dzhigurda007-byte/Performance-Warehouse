@@ -9,6 +9,7 @@ import type { Role } from '../src/core/roles';
 import { openTestDb } from './helpers/fakeDb';
 import { stockItems, stockTree } from '../src/core/stockTree';
 import { receiptCheck } from '../src/core/receiptCheck';
+import { updTotals } from '../src/core/upd';
 
 let db: DB;
 const people: Record<string, SessionUser> = {};
@@ -437,4 +438,47 @@ test('перемещение нескольких товаров из разны
   }));
   assert.deepEqual((await K.stockLooseInCell(cellB)).map((x) => [x.sku, x.qty]).sort(), [['GLOVES', 4], ['SHOVEL', 3]]);
   await assert.rejects(K.moveMany({ to: { cellId: cellB }, lines: [{ itemId: gloves, from: { cellId: cellB }, qty: 1 }] }), /месте назначения/);
+});
+
+test('УПД по расходному ордеру: строки по товарам, цены с НДС / без, сохранение и последняя цена', async () => {
+  await receive('keeper', [{ itemId: gloves, qty: 10, cellId: cellA }, { itemId: gloves, qty: 5, cellId: cellB }, { itemId: shovel, qty: 2, cellId: cellA }]);
+  const K = as('keeper');
+  const d = await K.createDocument('issue', 'fact');
+  await K.updateDocumentHeader(d, { recipient: 'ООО Ромашка', partner: 'Договор № 7', comment: '' });
+  await K.addLine(d, { itemId: gloves, qty: 10, cellId: cellA });
+  await K.addLine(d, { itemId: gloves, qty: 2, cellId: cellB });
+  await K.addLine(d, { itemId: shovel, qty: 1, cellId: cellA });
+  await K.postIssue(d, 'writeoff');
+
+  const u = await K.getUpd(d);
+  assert.equal(u.saved, false);
+  assert.equal(u.data.buyer.name, 'ООО Ромашка');
+  assert.equal(u.data.basis, 'Договор № 7');
+  assert.deepEqual(u.data.lines.map((l) => [l.sku, l.qty]), [['GLOVES', 12], ['SHOVEL', 1]]); // отбор из двух ячеек — одна строка
+
+  const data = { ...u.data, vat: 22 as const, priceWithVat: true, lines: u.data.lines.map((l) => ({ ...l, price: l.sku === 'GLOVES' ? 122 : 610 })) };
+  const t = await K.saveUpd(d, data);
+  assert.deepEqual([t.sumGross, t.vatSum, t.sumNet], [2074, 374, 1700]); // 12×122 + 610 = 2074; НДС 22/122
+  assert.equal(t.rows[0].priceNet, 100);
+  assert.equal(t.rows[0].okei, '796');
+
+  // повторно — сохранённые данные; новый УПД по тому же товару подставит последнюю цену
+  assert.equal((await K.getUpd(d)).saved, true);
+  const d2 = await K.createDocument('issue', 'fact');
+  await K.addLine(d2, { itemId: gloves, qty: 1, cellId: cellB });
+  const u2 = await K.getUpd(d2);
+  assert.equal(u2.data.lines[0].price, 122); // 100 без НДС → 122 с НДС 22%
+  assert.deepEqual((await K.updBuyers()).map((b) => b.name), ['ООО Ромашка']);
+
+  // без НДС, цены без налога
+  const t2 = updTotals({ vat: 'none', priceWithVat: false, lines: [{ item_id: 1, sku: 'A', name: 'A', unit: 'кг', qty: 1.5, price: 99.99 }] });
+  assert.deepEqual([t2.sumNet, t2.vatSum, t2.sumGross, t2.rows[0].okei], [149.99, 0, 149.99, '166']);
+  await assert.rejects(as('emp').getUpd(d), /прав|доступ/i);
+  await assert.rejects(K.getUpd(await K.createDocument('receipt', 'fact', { warehouseId: whId })), /расходному/);
+
+  // реквизиты продавца
+  await assert.rejects(as('admin').saveSettings({ orgInn: '123' }), /ИНН/);
+  await as('admin').saveSettings({ orgName: 'ООО Склад', orgInn: '7701234567', orgKpp: '770101001' });
+  const st = await K.settings();
+  assert.deepEqual([st.orgInn, st.orgKpp], ['7701234567', '770101001']);
 });

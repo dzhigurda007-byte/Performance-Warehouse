@@ -249,6 +249,16 @@ const MIGRATIONS: string[] = [
   `,
   // v6: удалённые из номенклатуры товары, у которых есть история (строки документов и движения сохраняются)
   `ALTER TABLE items ADD COLUMN deleted_at TEXT;`,
+  // v7: УПД по расходному ордеру (данные формы) и последняя цена товара без НДС
+  `
+  ALTER TABLE items ADD COLUMN price REAL;
+  CREATE TABLE upd_docs (
+    doc_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    data TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_by INTEGER REFERENCES users(id)
+  );
+  `,
 ];
 
 export async function migrate(db: DB): Promise<void> {

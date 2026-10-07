@@ -43,6 +43,7 @@ function RootStack() {
         <Stack.Screen name="import" options={{ title: 'Загрузка из Excel' }} />
         <Stack.Screen name="doc/[id]" options={{ title: 'Документ' }} />
         <Stack.Screen name="doc/allocate" options={{ title: 'Кому выдать' }} />
+        <Stack.Screen name="upd/[id]" options={{ title: 'УПД' }} />
         <Stack.Screen name="documents" options={{ title: 'Документы' }} />
         <Stack.Screen name="history" options={{ title: 'История движений' }} />
         <Stack.Screen name="move" options={{ title: 'Перемещение' }} />

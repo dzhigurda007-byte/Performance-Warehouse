@@ -668,6 +668,10 @@ export default function DocumentScreen() {
           </View>
         ) : null}
 
+        {isIssue && perms.operate && lines.length ? (
+          <Button title="УПД (универсальный передаточный документ)" icon="₽" variant="secondary"
+            onPress={() => router.push({ pathname: '/upd/[id]', params: { id: String(id) } })} />
+        ) : null}
         <Button title={isIssue && draft ? 'Печать ордера / лист подбора' : 'Печать документа'} icon="⎙" variant="secondary"
           disabled={!lines.length && !plan.length} onPress={() => setFormJob({
             title: `${DOC_TITLES[doc.type]} № ${doc.number}`,

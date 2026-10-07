@@ -53,7 +53,7 @@ export function BackendProvider({ children }: { children: ReactNode }) {
   const [serverUrl, setServerUrl] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<SessionUser | null>(null);
-  const [settings, setSettings] = useState<Settings>({ custodyEnabled: false, orgName: '' });
+  const [settings, setSettings] = useState<Settings>({ custodyEnabled: false, orgName: '', orgInn: '', orgKpp: '', orgAddress: '', orgDirector: '', orgAccountant: '' });
   const localDb = useRef<DB | null>(null);
   const tokenRef = useRef<string | null>(null);
   const userRef = useRef<SessionUser | null>(null);
