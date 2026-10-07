@@ -12,10 +12,10 @@ export async function printLabels(labels: Label[], layout: LabelLayout = 'sheet'
 
 /** Напечатать печатную форму (только сам документ, без окна программы). */
 export async function printForm(form: PrintableForm) {
-  await printHtml(form.html);
+  await printHtml(form.html, form.orientation);
 }
 
 /** Сохранить печатную форму отдельным файлом (телефон — PDF, ПК — отдельная вкладка → PDF). */
 export async function saveForm(form: PrintableForm) {
-  await saveHtml(form.html, form.fileName);
+  await saveHtml(form.html, form.fileName, form.orientation);
 }

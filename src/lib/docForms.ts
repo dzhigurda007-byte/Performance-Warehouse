@@ -29,6 +29,8 @@ export interface PrintableForm {
   /** Имя файла без расширения, например «Приходный ордер ПО-000012». */
   fileName: string;
   html: string;
+  /** Ориентация листа; по умолчанию книжная. УПД — всегда альбомная. */
+  orientation?: 'portrait' | 'landscape';
 }
 
 const q = (n: number) => formatQty(n);

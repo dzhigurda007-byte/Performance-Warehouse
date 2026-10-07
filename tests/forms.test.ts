@@ -79,6 +79,7 @@ test('печатная форма УПД: реквизиты, табличная
     { name: 'ООО Склад', inn: '7701234567', kpp: '770101001', address: 'Подольск', director: 'Иванов', accountant: 'Смирнова' });
   assert.equal(f.fileName, 'УПД РО-000003');
   assert.match(f.html, /size: A4 landscape/);
+  assert.equal(f.orientation, 'landscape');
   assert.match(f.html, /Счёт-фактура № РО-000003 от «07» октября 2026 г\./);
   assert.match(f.html, /7701234567\/770101001/);
   assert.match(f.html, /ООО &lt;Ромашка&gt;/);

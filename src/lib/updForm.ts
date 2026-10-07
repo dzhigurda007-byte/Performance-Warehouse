@@ -29,6 +29,8 @@ const longDate = (s: string) => {
 
 const CSS = `
   @page { size: A4 landscape; margin: 8mm 8mm 8mm 10mm; }
+  /* на экране — всегда ширина альбомного листа: форма не сжимается в узком окне, появляется прокрутка */
+  @media screen { body { min-width: 279mm; } }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body { font-family: Arial, Helvetica, sans-serif; font-size: 7.5pt; color: #000; line-height: 1.2; }
@@ -212,6 +214,7 @@ export function updForm(doc: DocumentRow, d: UpdData, seller: UpdSeller, ctx: Fo
   const title = `УПД ${d.number}`;
   return {
     fileName: title,
+    orientation: 'landscape',
     html: `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>${esc(title)}</title><style>${CSS}</style></head><body>${body}</body></html>`,
   };
 }
