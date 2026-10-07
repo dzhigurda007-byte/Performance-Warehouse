@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { useApi, usePerms } from '../../lib/backend';
+import { money } from '../../core/upd';
 import { ScrollView, View } from 'react-native';
 import { QrView } from '../../components/QrView';
 import { Badge, Button, Card, Empty, H1, ListRow, Muted, Section, confirm, notify, s, showError, useFocusLoad } from '../../components/ui';
@@ -27,6 +28,7 @@ export default function ItemScreen() {
       <Card>
         <H1>{item.name}</H1>
         <Muted>Артикул: {item.sku} · Ед.: {item.unit}{item.barcode ? ` · ШК: ${item.barcode}` : ''}</Muted>
+        <Muted>Цена: {item.price ? `${money(item.price)} ₽ за ${item.unit} без НДС` : 'не указана'}</Muted>
         {item.description ? <Muted>{item.description}</Muted> : null}
         <QrView value={itemQr(item.sku)} caption={item.sku} size={130} />
         <View style={s.rowWrap}>

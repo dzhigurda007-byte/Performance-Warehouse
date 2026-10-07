@@ -8,7 +8,15 @@ import { Button, Card, Field, Muted, Section, colors, notify, s, showError, useF
 import { formatQty } from '../../core/codes';
 import { VAT_LABEL, VAT_RATES, money, updProblems, updTotals, type UpdData, type UpdParty } from '../../core/upd';
 import { useApi, useBackend } from '../../lib/backend';
-import { updForm } from '../../lib/updForm';
+import { updForm, type UpdSeller } from '../../lib/updForm';
+import { PartyPicker } from '../../components/ref/PartyPicker';
+import { contractTitle, type Contract, type Counterparty, type Organization } from '../../core/refs';
+
+/** Реквизиты продавца из справочника «Организации». */
+const orgToSeller = (o: Organization): UpdSeller => ({
+  name: String(o.name ?? ''), inn: String(o.inn ?? ''), kpp: String(o.kpp ?? ''),
+  address: String(o.legal_address ?? o.actual_address ?? ''), director: String(o.director ?? ''), accountant: String(o.accountant ?? ''),
+});
 
 const ru = (s: string) => (/^\d{4}-\d{2}-\d{2}/.test(s) ? `${s.slice(8, 10)}.${s.slice(5, 7)}.${s.slice(0, 4)}` : s);
 /** «1 200,50» → 1200.5; пусто или ошибка → 0. */
@@ -33,6 +41,9 @@ export default function UpdScreen() {
   const [busy, setBusy] = useState(false);
   const [formJob, setFormJob] = useState<FormJob | null>(null);
   const [buyers, setBuyers] = useState<UpdParty[] | null>(null);
+  const [orgs] = useFocusLoad(() => api.listOrgs(), [api]);
+  const [pickParty, setPickParty] = useState(false);
+  const [contracts, setContracts] = useState<Contract[] | null>(null);
 
   useEffect(() => {
     if (!loaded) return;
@@ -51,10 +62,38 @@ export default function UpdScreen() {
   const totals = useMemo(() => (current ? updTotals(current) : null), [current]);
 
   if (!loaded || !d || !current || !totals) return null;
-  const seller = {
+  // продавец: выбранная в УПД организация, иначе организация по умолчанию, иначе прежние реквизиты из настроек
+  const sellerOrg = orgs?.find((o) => o.id === d.sellerOrgId) ?? orgs?.[0];
+  const seller: UpdSeller = sellerOrg ? orgToSeller(sellerOrg) : {
     name: settings.orgName, inn: settings.orgInn, kpp: settings.orgKpp, address: settings.orgAddress,
     director: settings.orgDirector, accountant: settings.orgAccountant,
   };
+
+  /** Покупатель из справочника контрагентов; договор с ним — основанием передачи. */
+  async function choosePartyAsBuyer(c: Counterparty) {
+    const next: UpdData = {
+      ...d!, buyerPartyId: c.id,
+      buyer: { name: String(c.name), inn: String(c.inn ?? ''), kpp: String(c.kpp ?? ''), address: String(c.address ?? c.actual_address ?? '') },
+    };
+    setD(next);
+    try {
+      const list = await api.listContracts({ counterpartyId: c.id });
+      if (list.length === 1) setD({ ...next, contractId: list[0].id, basis: contractTitle(list[0]) });
+      else if (list.length > 1) setTimeout(() => setContracts(list), 300);
+    } catch (e) {
+      showError(e);
+    }
+  }
+
+  async function chooseContract() {
+    try {
+      const list = await api.listContracts({ counterpartyId: d!.buyerPartyId ?? null });
+      if (!list.length) return notify('Договоров нет', 'Добавьте договор: Справочник → Договоры');
+      setContracts(list);
+    } catch (e) {
+      showError(e);
+    }
+  }
   const problems = updProblems(current, seller);
   const set = (patch: Partial<UpdData>) => setD({ ...d, ...patch });
   const setBuyer = (patch: Partial<UpdParty>) => setD({ ...d, buyer: { ...d.buyer, ...patch } });
@@ -78,7 +117,7 @@ export default function UpdScreen() {
     setFormJob({
       title: `УПД № ${data.number}`,
       subtitle: problems.length ? `Внимание: ${problems.join('; ')}` : 'Альбомный лист A4',
-      variants: [{ build: (ctx) => updForm(loaded!.doc, data, seller, ctx) }],
+      variants: [{ build: (ctx) => updForm(loaded!.doc, { ...data, sellerOrgId: sellerOrg?.id ?? null }, seller, ctx) }],
     });
   }
 
@@ -100,15 +139,20 @@ export default function UpdScreen() {
 
       <Card>
         <Text style={{ fontWeight: '700', color: colors.text }}>Продавец / грузоотправитель</Text>
+        {orgs && orgs.length > 1 ? (
+          <Chips value={sellerOrg?.id ?? 0} onChange={(v) => set({ sellerOrgId: v })}
+            options={orgs.map((o) => ({ value: o.id, label: String(o.short_name || o.name) }))} />
+        ) : null}
         {seller.name ? (
           <Muted>{seller.name}{seller.inn ? ` · ИНН/КПП ${[seller.inn, seller.kpp].filter(Boolean).join('/')}` : ''}{seller.address ? `\n${seller.address}` : ''}</Muted>
-        ) : <Text style={{ color: colors.danger }}>Реквизиты не заполнены: Ещё → Настройки (администратор)</Text>}
+        ) : <Text style={{ color: colors.danger }}>Нет реквизитов: добавьте свою организацию в «Справочник → Организации»</Text>}
       </Card>
 
       <Card>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Text style={{ fontWeight: '700', color: colors.text }}>Покупатель</Text>
-          <Button title="Из прошлых УПД" variant="ghost" style={{ marginVertical: 0, minHeight: 34 }}
+        <Text style={{ fontWeight: '700', color: colors.text }}>Покупатель</Text>
+        <View style={s.rowWrap}>
+          <Button title="Из контрагентов" variant="secondary" style={{ flex: 1 }} onPress={() => setPickParty(true)} />
+          <Button title="Из прошлых УПД" variant="ghost" style={{ flex: 1 }}
             onPress={() => api.updBuyers().then((b) => (b.length ? setBuyers(b) : notify('Пока нет', 'Сохранённых покупателей ещё нет'))).catch(showError)} />
         </View>
         <Field label="Наименование" value={d.buyer.name} onChangeText={(v) => setBuyer({ name: v })} />
@@ -130,7 +174,8 @@ export default function UpdScreen() {
       </Card>
 
       <Card>
-        <Field label="Основание передачи (договор, заказ)" value={d.basis} onChangeText={(v) => set({ basis: v })} />
+        <Field label="Основание передачи (договор, заказ)" value={d.basis} onChangeText={(v) => set({ basis: v, contractId: null })} />
+        <Button title={d.buyerPartyId ? 'Выбрать договор с покупателем' : 'Выбрать договор из справочника'} variant="ghost" onPress={chooseContract} />
         <Field label="К платёжно-расчётному документу № … от …" value={d.paymentDoc} onChangeText={(v) => set({ paymentDoc: v })} />
         <View style={s.rowWrap}>
           <View style={{ flex: 1 }}><Field label="Дата отгрузки" value={dates.ship} onChangeText={(v) => setDates({ ...dates, ship: v })} /></View>
@@ -183,6 +228,12 @@ export default function UpdScreen() {
       <Button title="К расходному ордеру" variant="ghost" onPress={() => router.back()} />
 
       <FormMenu job={formJob} onClose={() => setFormJob(null)} />
+      <PartyPicker visible={pickParty} onClose={() => setPickParty(false)} onPick={(c) => { setPickParty(false); choosePartyAsBuyer(c); }} />
+      <ActionMenu visible={contracts !== null} title="Договор — основание передачи" onClose={() => setContracts(null)}
+        actions={(contracts ?? []).map((c) => ({
+          label: `${contractTitle(c)}${c.party_name && !d.buyerPartyId ? ` · ${c.party_name}` : ''}`,
+          onPress: () => set({ contractId: c.id, basis: contractTitle(c) }),
+        }))} />
       <ActionMenu visible={buyers !== null} title="Покупатель из прошлых УПД" onClose={() => setBuyers(null)}
         actions={(buyers ?? []).map((b) => ({
           label: `${b.name}${b.inn ? ` · ИНН ${b.inn}` : ''}`,

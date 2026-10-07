@@ -9,7 +9,7 @@ import { useApi } from '../../lib/backend';
 export default function ItemEdit() {
   const api = useApi();
   const { id } = useLocalSearchParams<{ id?: string }>();
-  const [form, setForm] = useState({ sku: '', name: '', unit: 'шт', barcode: '', description: '', group_id: 0, track_units: false });
+  const [form, setForm] = useState({ sku: '', name: '', unit: 'шт', barcode: '', description: '', group_id: 0, track_units: false, price: '' });
   const [scan, setScan] = useState(false);
   const [groups] = useFocusLoad(() => api.listGroups(), [api]);
 
@@ -17,7 +17,7 @@ export default function ItemEdit() {
     if (id) {
       api.getItem(Number(id)).then((i) => i && setForm({
         sku: i.sku, name: i.name, unit: i.unit, barcode: i.barcode ?? '', description: i.description ?? '',
-        group_id: i.group_id ?? 0, track_units: !!i.track_units,
+        group_id: i.group_id ?? 0, track_units: !!i.track_units, price: i.price ? String(i.price).replace('.', ',') : '',
       }));
     } else {
       api.suggestSku().then((sku) => setForm((f) => ({ ...f, sku })));
@@ -28,6 +28,7 @@ export default function ItemEdit() {
     try {
       const newId = await api.saveItem({
         id: id ? Number(id) : undefined, ...form, group_id: form.group_id || null, track_units: form.track_units ? 1 : 0,
+        price: form.price.trim() ? Number(form.price.replace(/[\s\u00a0₽]/g, '').replace(',', '.')) : null,
       });
       if (id) router.back();
       else router.replace({ pathname: '/item/[id]', params: { id: String(newId) } });
@@ -46,7 +47,15 @@ export default function ItemEdit() {
       <Field label="Наименование *" value={form.name} onChangeText={(name) => setForm({ ...form, name })} />
       <Field label="Артикул (используется в QR-коде товара) *" value={form.sku} autoCapitalize="characters"
         onChangeText={(sku) => setForm({ ...form, sku })} />
-      <Field label="Единица измерения" value={form.unit} onChangeText={(unit) => setForm({ ...form, unit })} />
+      <View style={s.rowWrap}>
+        <View style={{ flex: 1 }}>
+          <Field label="Единица измерения" value={form.unit} onChangeText={(unit) => setForm({ ...form, unit })} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Field label="Цена без НДС, ₽" value={form.price} keyboardType="decimal-pad" placeholder="0,00"
+            onChangeText={(price) => setForm({ ...form, price })} />
+        </View>
+      </View>
       <View style={[s.rowWrap, { alignItems: 'flex-end' }]}>
         <View style={{ flex: 1 }}>
           <Field label="Штрихкод производителя" value={form.barcode} keyboardType="number-pad"

@@ -259,6 +259,38 @@ const MIGRATIONS: string[] = [
     updated_by INTEGER REFERENCES users(id)
   );
   `,
+  // v8: справочники — свои организации, контрагенты (юр. / физ. лица), договоры
+  `
+  CREATE TABLE organizations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL, short_name TEXT, inn TEXT, kpp TEXT, ogrn TEXT,
+    legal_address TEXT, actual_address TEXT,
+    bank_name TEXT, bik TEXT, bank_account TEXT, corr_account TEXT,
+    director TEXT, director_position TEXT, accountant TEXT, phone TEXT, email TEXT,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  );
+  CREATE TABLE counterparties (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK (kind IN ('legal', 'person')),
+    name TEXT NOT NULL, short_name TEXT, inn TEXT, kpp TEXT, ogrn TEXT,
+    address TEXT, actual_address TEXT,
+    bank_name TEXT, bik TEXT, bank_account TEXT, corr_account TEXT,
+    director TEXT, director_position TEXT,
+    birth_date TEXT, passport_series TEXT, passport_number TEXT, passport_issued_by TEXT, passport_issued_at TEXT, passport_code TEXT,
+    phone TEXT, email TEXT, comment TEXT, search_name TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  );
+  CREATE INDEX idx_counterparties_kind ON counterparties(kind, name);
+  CREATE TABLE contracts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    number TEXT NOT NULL, date TEXT NOT NULL, title TEXT, valid_until TEXT, amount REAL, comment TEXT,
+    org_id INTEGER REFERENCES organizations(id),
+    counterparty_id INTEGER REFERENCES counterparties(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  );
+  CREATE INDEX idx_contracts_party ON contracts(counterparty_id);
+  `,
 ];
 
 export async function migrate(db: DB): Promise<void> {
@@ -273,6 +305,19 @@ export async function migrate(db: DB): Promise<void> {
     await db.execAsync(`PRAGMA user_version = ${version}`);
   }
   await syncItemSearch(db);
+  await ensureDefaultOrganization(db);
+}
+
+/** Реквизиты из прежних настроек (одна организация) переносятся в справочник «Организации». */
+async function ensureDefaultOrganization(db: DB) {
+  const n = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) AS n FROM organizations');
+  if (n?.n) return;
+  const meta = async (k: string) => (await db.getFirstAsync<{ value: string }>('SELECT value FROM meta WHERE key = ?', k))?.value ?? null;
+  const name = await meta('org_name');
+  if (!name) return;
+  await db.runAsync(`INSERT INTO organizations(name, inn, kpp, legal_address, director, accountant, is_default)
+    VALUES(?, ?, ?, ?, ?, ?, 1)`, name, await meta('org_inn'), await meta('org_kpp'), await meta('org_address'),
+  await meta('org_director'), await meta('org_accountant'));
 }
 
 /** Заполнить поисковые поля товаров, у которых они пустые (после обновления базы). */

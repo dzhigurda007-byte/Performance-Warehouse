@@ -1,3 +1,4 @@
+import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ScrollView, Switch, Text, View } from 'react-native';
 import { Button, Card, Field, Muted, colors, notify, s, showError } from '../components/ui';
@@ -26,19 +27,10 @@ export default function SettingsScreen() {
         <Field label="Название организации (полное, как в документах)" value={form.orgName} onChangeText={(v) => setForm({ ...form, orgName: v })} />
       </Card>
       <Card>
-        <Text style={{ fontSize: 16, fontWeight: '600', color: colors.text, marginBottom: 6 }}>Реквизиты для УПД (продавец)</Text>
-        <View style={s.rowWrap}>
-          <View style={{ flex: 1 }}>
-            <Field label="ИНН" value={form.orgInn} keyboardType="number-pad" maxLength={12} onChangeText={(v) => setForm({ ...form, orgInn: v })} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Field label="КПП" value={form.orgKpp} keyboardType="number-pad" maxLength={9} onChangeText={(v) => setForm({ ...form, orgKpp: v })} />
-          </View>
-        </View>
-        <Field label="Адрес" value={form.orgAddress} multiline onChangeText={(v) => setForm({ ...form, orgAddress: v })} />
-        <Field label="Руководитель (ФИО)" value={form.orgDirector} onChangeText={(v) => setForm({ ...form, orgDirector: v })} />
-        <Field label="Главный бухгалтер (ФИО)" value={form.orgAccountant} onChangeText={(v) => setForm({ ...form, orgAccountant: v })} />
-        <Muted>Подставляются в УПД по расходному ордеру. Для ИП — ИНН из 12 цифр, КПП не заполняется.</Muted>
+        <Text style={{ fontSize: 16, fontWeight: '600', color: colors.text, marginBottom: 6 }}>Реквизиты организаций</Text>
+        <Muted>ИНН, КПП, адреса, банк, руководитель — в «Справочник → Организации». Оттуда они подставляются в УПД и договоры.</Muted>
+        <Button title="Открыть «Организации»" variant="secondary"
+          onPress={() => router.push({ pathname: '/items', params: { section: 'orgs' } })} />
       </Card>
       <Card>
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>

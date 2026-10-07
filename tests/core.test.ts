@@ -10,6 +10,7 @@ import { openTestDb } from './helpers/fakeDb';
 import { stockItems, stockTree } from '../src/core/stockTree';
 import { receiptCheck } from '../src/core/receiptCheck';
 import { updTotals } from '../src/core/upd';
+import { contractTitle } from '../src/core/refs';
 
 let db: DB;
 const people: Record<string, SessionUser> = {};
@@ -481,4 +482,61 @@ test('УПД по расходному ордеру: строки по това�
   await as('admin').saveSettings({ orgName: 'ООО Склад', orgInn: '7701234567', orgKpp: '770101001' });
   const st = await K.settings();
   assert.deepEqual([st.orgInn, st.orgKpp], ['7701234567', '770101001']);
+});
+
+test('справочник: организации, контрагенты (юр. / физ. лица), договоры со сторонами из справочника', async () => {
+  const B = as('boss');
+  const K = as('keeper');
+  // реквизиты проверяются
+  await assert.rejects(B.saveOrg({ name: 'ООО Склад', inn: '123' }), /ИНН: 10 или 12 цифр/);
+  await assert.rejects(B.saveParty('person', { name: 'Петров', passport_issued_at: '31.02.2020' }), /Дата выдачи: дата/);
+  await assert.rejects(K.saveOrg({ name: 'ООО Склад' }), /справочник/); // кладовщик только читает
+
+  const org1 = await B.saveOrg({ name: 'ООО «Склад»', inn: '7701234567', kpp: '770101001', bik: '044525225', bank_account: '40702810000000000001' });
+  const org2 = await B.saveOrg({ name: 'ИП Иванов', inn: '770123456789' });
+  assert.equal((await K.defaultOrg())!.id, org1); // первая — по умолчанию
+  await B.saveOrg({ id: org2, name: 'ИП Иванов', inn: '770123456789', is_default: 1 });
+  assert.equal((await K.defaultOrg())!.id, org2);
+  assert.equal((await K.listOrgs()).filter((o) => o.is_default).length, 1);
+
+  const legal = await B.saveParty('legal', { name: 'ООО «Ромашка»', inn: '7712345678', kpp: '771201001', address: 'Москва' });
+  const person = await B.saveParty('person', {
+    name: 'Сидоров Сидор Сидорович', passport_series: '45 12', passport_number: '123456', passport_issued_at: '01.02.2015', birth_date: '1990-05-03',
+  });
+  assert.equal((await K.getParty(person))!.passport_series, '4512');
+  assert.equal((await K.getParty(person))!.passport_issued_at, '2015-02-01');
+  assert.deepEqual((await K.listParties('legal', 'ромаш')).map((c) => c.id), [legal]);
+  assert.deepEqual((await K.listParties('person')).map((c) => c.id), [person]);
+  await assert.rejects(B.saveParty('person', { id: legal, name: 'X' }), /вид контрагента/);
+
+  await assert.rejects(B.saveContract({ number: '15', date: '01.09.2026', org_id: org1 }), /контрагента/);
+  await assert.rejects(B.saveContract({ number: '15', date: '01.09.2026', valid_until: '01.01.2026', org_id: org1, counterparty_id: legal }), /раньше/);
+  const c1 = await B.saveContract({ number: '15', date: '01.09.2026', title: 'Договор поставки', amount: '1 500 000,50', org_id: org1, counterparty_id: legal });
+  const c2 = await B.saveContract({ number: 'П-3', date: '2026-10-01', org_id: org2, counterparty_id: person });
+  const got = (await K.getContract(c1))!;
+  assert.deepEqual([got.org_name, got.party_name, got.party_kind, got.amount, got.date], ['ООО «Склад»', 'ООО «Ромашка»', 'legal', 1500000.5, '2026-09-01']);
+  assert.equal(contractTitle(got), 'Договор поставки № 15 от 01.09.2026');
+  assert.deepEqual((await K.listContracts({ counterpartyId: person })).map((c) => c.id), [c2]);
+  assert.deepEqual((await K.listContracts({ search: 'ромаш' })).map((c) => c.id), [c1]);
+
+  // стороны договора нельзя удалить, пока есть договор
+  await assert.rejects(B.deleteParty(legal), /договоров/);
+  await assert.rejects(B.deleteOrg(org1), /договорах/);
+  await B.deleteContract(c1);
+  await B.deleteParty(legal);
+  assert.equal(await K.getParty(legal), null);
+
+  // цена товара в номенклатуре
+  await B.saveItem({ id: gloves, sku: 'GLOVES', name: 'Перчатки', barcode: '4600000000028', price: 99.5 });
+  assert.equal((await K.getItem(gloves))!.price, 99.5);
+});
+
+test('реквизиты из прежних настроек переносятся в «Организации»', async () => {
+  const fresh = openTestDb();
+  await migrate(fresh); // пустая база: организаций нет и переносить нечего
+  assert.equal((await fresh.getFirstAsync<{ n: number }>('SELECT COUNT(*) AS n FROM organizations'))!.n, 0);
+  await fresh.runAsync("INSERT OR REPLACE INTO meta(key, value) VALUES ('org_name', 'ООО Старое'), ('org_inn', '7701234567')");
+  await migrate(fresh);
+  const org = await fresh.getFirstAsync<{ name: string; inn: string; is_default: number }>('SELECT name, inn, is_default FROM organizations');
+  assert.deepEqual({ ...org }, { name: 'ООО Старое', inn: '7701234567', is_default: 1 });
 });

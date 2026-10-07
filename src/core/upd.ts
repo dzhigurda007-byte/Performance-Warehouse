@@ -47,6 +47,10 @@ export interface UpdData {
   /** Кто передал товар (кладовщик) и кто получил. */
   passedBy: string;
   receivedBy: string;
+  /** Связь со справочниками: наша организация, контрагент-покупатель, договор. */
+  sellerOrgId?: number | null;
+  buyerPartyId?: number | null;
+  contractId?: number | null;
 }
 
 export interface UpdRow extends UpdLine {

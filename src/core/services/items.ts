@@ -103,15 +103,18 @@ export const items = {
       if (dup) throw new BusinessError('Этот штрихкод уже назначен другому товару');
     }
     const unit = emptyToNull(it.unit) ?? 'шт';
-    const args = [sku, name, unit, barcode, emptyToNull(it.description), it.group_id ?? null, it.track_units ? 1 : 0, fold(`${name} ${sku}`)];
+    const price = it.price === undefined || it.price === null || (it.price as unknown) === '' ? null : Number(it.price);
+    if (price !== null && !(Number.isFinite(price) && price >= 0)) throw new BusinessError('Цена — неотрицательное число');
+    const args = [sku, name, unit, barcode, emptyToNull(it.description), it.group_id ?? null, it.track_units ? 1 : 0, fold(`${name} ${sku}`),
+      price === null ? null : Math.round(price * 100) / 100];
     try {
       if (it.id) {
         await ctx.db.runAsync(`UPDATE items SET sku = ?, name = ?, unit = ?, barcode = ?, description = ?, group_id = ?,
-          track_units = ?, search_name = ? WHERE id = ?`, ...args, it.id);
+          track_units = ?, search_name = ?, price = ? WHERE id = ?`, ...args, it.id);
         return it.id;
       }
-      const r = await ctx.db.runAsync(`INSERT INTO items(sku, name, unit, barcode, description, group_id, track_units, search_name)
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, ...args);
+      const r = await ctx.db.runAsync(`INSERT INTO items(sku, name, unit, barcode, description, group_id, track_units, search_name, price)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, ...args);
       return r.lastInsertRowId;
     } catch (e) {
       if (String(e).includes('UNIQUE')) throw new BusinessError('Товар с таким артикулом уже существует');

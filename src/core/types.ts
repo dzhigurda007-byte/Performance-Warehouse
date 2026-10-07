@@ -105,6 +105,8 @@ export interface Item {
   track_units: number;
   /** Удалён из номенклатуры (история сохранена). */
   deleted_at?: string | null;
+  /** Цена за единицу без НДС, ₽ (подставляется в УПД). */
+  price?: number | null;
 }
 
 /** Строка остатка с адресом хранения. */

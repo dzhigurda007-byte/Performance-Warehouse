@@ -7,6 +7,7 @@ import { stockQueries } from './services/stock';
 import { structure } from './services/structure';
 import { users } from './services/users';
 import { upd } from './services/upd';
+import { refs } from './services/refs';
 import { can } from './roles';
 import { need } from './ctx';
 import type { StockReportFilter } from './types';
@@ -92,6 +93,21 @@ export const api = {
   unpostDocument: documents.unpost,
   moveStock: documents.moveStock,
   moveMany: documents.moveMany,
+
+  // справочники: организации, контрагенты, договоры
+  listOrgs: refs.listOrgs,
+  getOrg: refs.getOrg,
+  defaultOrg: refs.defaultOrg,
+  saveOrg: refs.saveOrg,
+  deleteOrg: refs.deleteOrg,
+  listParties: refs.listParties,
+  getParty: refs.getParty,
+  saveParty: refs.saveParty,
+  deleteParty: refs.deleteParty,
+  listContracts: refs.listContracts,
+  getContract: refs.getContract,
+  saveContract: refs.saveContract,
+  deleteContract: refs.deleteContract,
 
   // УПД по расходному ордеру
   getUpd: upd.get,
