@@ -8,6 +8,7 @@ import { structure } from './services/structure';
 import { users } from './services/users';
 import { upd } from './services/upd';
 import { refs } from './services/refs';
+import { dev } from './services/dev';
 import { can } from './roles';
 import { need } from './ctx';
 import type { StockReportFilter } from './types';
@@ -50,6 +51,7 @@ export const api = {
   listItems: items.list,
   getItem: items.get,
   saveItem: items.save,
+  createItemFromScan: items.createFromScan,
   deleteItem: items.remove,
   deleteItems: items.removeMany,
   suggestSku: items.suggestSku,
@@ -87,6 +89,9 @@ export const api = {
   setFactQty: documents.setFactQty,
   fillFromPlan: documents.fillFromPlan,
   takeTask: documents.takeTask,
+  assignTask: documents.assignTask,
+  completeTask: documents.completeTask,
+  reopenTask: documents.reopenTask,
   releaseTask: documents.releaseTask,
   listAllocations: documents.allocations,
   setAllocations: documents.setAllocations,
@@ -128,6 +133,9 @@ export const api = {
   // история и сканер
   listMoves: history.moves,
   resolveScan: history.resolveScan,
+
+  // разработчик (только администратор)
+  devInfo: dev.info,
 
   // пользователи и настройки
   me: users.me,

@@ -23,7 +23,7 @@ export default function UserEdit() {
   }, [u?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!u || !form || !data || !me) return null;
-  const roles = ROLES.filter((r) => p.administer || rank(r) < rank(p.role));
+  const roles = ROLES.filter((r) => p.develop || rank(r) < rank(p.role));
   const supervisors = data.users.filter((x) => x.id !== id && x.active && rank(x.role) > rank(form.role));
 
   async function save() {

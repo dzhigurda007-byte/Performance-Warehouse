@@ -81,6 +81,10 @@ export const remoteAuth = {
   logout: (server: string, token: string) => request(`${server}/api/auth/logout`, {}, token).catch(() => undefined),
   info: (server: string, token: string, recheck = false) =>
     request<ServerInfo>(`${server}/api/server/info`, { recheck }, token, 30000),
+  /** Резервные копии базы (раздел «Разработчик», только администратор); create — сделать копию сейчас. */
+  backups: (server: string, token: string, create = false) =>
+    request<{ dir: string; created: string | null; files: { name: string; size: number }[] }>(
+      `${server}/api/dev/backups`, { create }, token, 120000),
 };
 
 /** API, работающее через сервер склада: вызов → POST /api/rpc. */

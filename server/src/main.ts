@@ -14,6 +14,7 @@ import { networkInterfaces } from 'node:os';
 import { extname, join, normalize, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { api, type ApiMethod } from '../../src/core/api';
+import { can } from '../../src/core/roles';
 import type { Ctx, SessionUser } from '../../src/core/ctx';
 import { BusinessError, getMeta } from '../../src/core/db';
 import { migrate } from '../../src/core/schema';
@@ -120,6 +121,16 @@ function backup(raw: DatabaseSync, dir: string, keep = 30) {
   const files = readdirSync(dir).filter((f) => /^warehouse-\d{4}-\d{2}-\d{2}\.db$/.test(f)).sort();
   for (const f of files.slice(0, Math.max(0, files.length - keep))) rmSync(join(dir, f));
   console.log(`[backup] ${file}`);
+}
+
+/** Резервная копия по кнопке (раздел «Разработчик»): warehouse-manual-ГГГГ-ММ-ДД-ЧЧММСС.db. */
+function manualBackup(raw: DatabaseSync, dir: string) {
+  mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+  const name = `warehouse-manual-${stamp}.db`;
+  raw.exec(`VACUUM INTO '${join(dir, name).replace(/'/g, "''")}'`);
+  console.log(`[backup] ${name} (вручную)`);
+  return name;
 }
 
 // ---------------------------------------------------------------- сервер
@@ -248,6 +259,18 @@ export async function startServer(opts: ServerOptions) {
           addresses: net?.addresses ?? [],
           dataDir: resolve(opts.dataDir),
         });
+      }
+      case '/api/dev/backups': {
+        // раздел «Разработчик»: резервные копии базы (только администратор)
+        if (!can.develop(session.user.role)) return send(res, 403, { error: { message: 'Только администратор', code: 'forbidden' } });
+        const dir = join(opts.dataDir, 'backups');
+        let created: string | null = null;
+        if (body.create) created = manualBackup(raw, dir);
+        const files = existsSync(dir)
+          ? readdirSync(dir).filter((f) => f.endsWith('.db')).sort().reverse()
+            .map((f) => ({ name: f, size: statSync(join(dir, f)).size }))
+          : [];
+        return send(res, 200, { dir: resolve(dir), created, files });
       }
       case '/api/rpc': {
         const method = String(body.method ?? '') as ApiMethod;

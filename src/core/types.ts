@@ -1,6 +1,8 @@
 export type DocType = 'receipt' | 'issue' | 'move';
 export type PostMode = 'writeoff' | 'custody';
-export type DocSource = 'manual' | 'scan' | 'excel' | 'return';
+export type DocSource = 'manual' | 'scan' | 'excel' | 'return' | 'task';
+/** Задание: open — в работе, done — выполнено (отчёт у постановщика). */
+export type TaskStatus = 'open' | 'done';
 export type DocMode = 'plan' | 'fact';
 export type DocStatus = 'draft' | 'posted';
 
@@ -172,6 +174,15 @@ export interface DocumentRow {
   assignee_id: number | null;
   assignee_name: string | null;
   assigned_at: string | null;
+  /** Задание (null — обычный документ). */
+  task_status: TaskStatus | null;
+  completed_by: number | null;
+  completed_by_name: string | null;
+  completed_at: string | null;
+  /** Расходный ордер, сформированный по выполненному заданию на отбор. */
+  order_id: number | null;
+  order_number: string | null;
+  order_status: DocStatus | null;
 }
 
 export interface DocLine {

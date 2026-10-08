@@ -16,6 +16,7 @@ import {
 import { useApi, useBackend, usePerms } from '../../lib/backend';
 import { CHECK_LABEL, receiptCheck, type CheckRow, type CheckStatus } from '../../core/receiptCheck';
 import { DOC_SOURCE_LABEL, DOC_TITLES } from '../../lib/docs';
+import { ROLE_LABEL } from '../../core/roles';
 import { printLabels } from '../../lib/print';
 import { documentForm } from '../../lib/docForms';
 import { FormMenu, type FormJob } from '../../components/FormMenu';
@@ -85,9 +86,9 @@ export default function DocumentScreen() {
     if (doc) setHeader({ partner: doc.partner ?? '', recipient: doc.recipient ?? '', comment: doc.comment ?? '' });
   }, [doc?.id, doc?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Кладовщик открыл свободное задание — оно закрепляется за ним, его ФИО попадает в ордер.
+  // Исполнитель (ниже руководителя) открыл свободное задание — оно закрепляется за ним, его ФИО попадает в ордер.
   useEffect(() => {
-    if (doc && user && doc.status === 'draft' && doc.plan_count > 0 && !doc.assignee_id && user.role === 'storekeeper') {
+    if (doc && user && doc.status === 'draft' && doc.task_status === 'open' && !doc.assignee_id && !perms.manageUsers) {
       api.takeTask(id).then(reload).catch(() => reload());
     }
   }, [doc?.id, doc?.assignee_id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -106,16 +107,22 @@ export default function DocumentScreen() {
   const isIssue = doc.type === 'issue';
   const isFact = isIssue && doc.mode === 'fact';
   /** Задание на отбор: отбор сканированием, как по факту, со сверкой с заданием. */
-  const isIssueTask = isIssue && plan.length > 0;
+  const isTask = !!doc.task_status;
+  const taskOpen = doc.task_status === 'open';
+  const taskDone = doc.task_status === 'done';
+  const isIssueTask = isIssue && isTask;
   const pickMode = isFact || isIssueTask;
   const verb = isIssue ? 'отобрано' : 'принято';
-  const canEdit = draft && !isReturn && (perms.operate || doc.created_by === user.id);
+  const myTask = taskOpen && doc.assignee_id === user.id;
+  const canEdit = draft && !isReturn && !taskDone && (perms.operate || doc.created_by === user.id || myTask);
+  /** Шапку задания (основание, получатель) меняет постановщик / кладовщик, не исполнитель. */
+  const canEditHeader = canEdit && (!isTask || perms.operate);
 
   const later = (fn: () => void) => setTimeout(fn, Platform.OS === 'ios' ? 450 : 50);
   const openQty = (r: QtyReq) => later(() => setQtyReq(r));
   const openStock = (r: StockReq) => later(() => setStockReq(r));
   const openItem = (r: { barcode?: string; purpose?: 'plan' }) => later(() => setItemPick(r));
-  const saveHeader = () => draft && !isReturn && api.updateDocumentHeader(id, header).catch(showError);
+  const saveHeader = () => draft && !isReturn && canEditHeader && api.updateDocumentHeader(id, header).catch(showError);
 
   const freeQty = (r: StockRow) =>
     r.qty - lines
@@ -235,13 +242,12 @@ export default function DocumentScreen() {
         await receiveItem(r.item);
         return true;
       }
-      if (!perms.manageItems) {
-        return { ok: false, tone: 'red', text: `Код ${code} не найден в номенклатуре.\nСообщите руководителю — товар заводит он.` };
+      // ШК нет в базе: кладовщик, руководитель, администратор заводят товар на месте
+      if (!perms.operate) {
+        return { ok: false, tone: 'red', text: `Код ${code} не найден в номенклатуре.\nПозовите кладовщика — он заведёт товар.` };
       }
       setScanOpen(false);
-      if (perms.manageItems) {
-        later(() => confirm('Неизвестный код', `${code}\nСоздать новый товар с этим штрихкодом?`, () => openItem({ barcode: code }), 'Создать'));
-      }
+      later(() => confirm('Штрихкода нет в базе', `${code}\nЗавести новый товар с этим штрихкодом и принять его?`, () => openItem({ barcode: code }), 'Завести товар'));
       return true;
     }
     if (r.type === 'box') {
@@ -424,6 +430,51 @@ export default function DocumentScreen() {
     () => run(() => api.postIssue(id, 'writeoff'), `${doc.number} проведён.\n${postedNote}`), 'Провести');
 
   /** «Провести»: если включена выдача под ответственность — выбор, как провести. */
+  /** Поставить задание сотруднику или вернуть в общий пул. */
+  async function assignMenu() {
+    try {
+      const people = (await api.listUsers()).filter((u) => u.active);
+      setMenu({
+        title: 'Кому поставить задание?',
+        subtitle: 'Назначенное задание видят исполнитель, постановщик и руководитель',
+        actions: [
+          { label: 'В общий пул (возьмёт любой свободный)', onPress: () => api.assignTask(id, null).then(reload).catch(showError) },
+          ...people.map((u) => ({
+            label: `${u.full_name} — ${ROLE_LABEL[u.role]}${u.id === doc!.assignee_id ? ' ✓' : ''}`,
+            onPress: () => api.assignTask(id, u.id).then(reload).catch(showError),
+          })),
+        ],
+      });
+    } catch (e) {
+      showError(e);
+    }
+  }
+
+  /** Завершить задание: отчёт уходит постановщику; по отбору формируется расходный ордер. */
+  function finishTask() {
+    const bad = check ? check.rows.filter((x) => x.status !== 'ok') : [];
+    const list = bad.slice(0, 8).map((x) => `${x.item_name}: ${formatQty(x.fact)} из ${formatQty(x.plan)} (${
+      isIssue && x.status === 'short' ? 'не добрано' : CHECK_LABEL[x.status].toLowerCase()})`).join('\n');
+    const tail = isIssue ? '\n\nПо заданию сформируется расходный ордер — его проводит кладовщик или руководитель.'
+      : '\n\nПриёмку проведёт кладовщик или руководитель.';
+    confirm(bad.length ? 'Завершить с расхождениями?' : 'Завершить задание?',
+      `${bad.length ? `${list}${bad.length > 8 ? '\n…' : ''}` : 'Всё сошлось с заданием.'}${tail}`,
+      async () => {
+        setBusy(true);
+        try {
+          const res = await api.completeTask(id);
+          notify('Задание выполнено', res.orderId ? 'Сформирован расходный ордер. Отчёт отправлен постановщику.' : 'Отчёт отправлен постановщику.');
+          if (res.orderId && perms.operate) router.replace({ pathname: '/doc/[id]', params: { id: String(res.orderId) } });
+          else if (!perms.operate) router.back();
+          else reload();
+        } catch (e) {
+          showError(e);
+        } finally {
+          setBusy(false);
+        }
+      }, 'Завершить');
+  }
+
   const postIssue = () => {
     if (check && !check.matched) {
       const list = check.rows.filter((x) => x.status !== 'ok').slice(0, 8)
@@ -468,7 +519,8 @@ export default function DocumentScreen() {
         <Card>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <View style={{ flex: 1 }}>
-              <H1>{DOC_TITLES[doc.type]}{isReceipt && (plan.length || doc.mode === 'plan') ? ' · задание на приёмку' : ''}</H1>
+              <H1>{isTask ? (isIssue ? 'Задание на отбор' : 'Задание на приёмку') : DOC_TITLES[doc.type]}</H1>
+              {doc.source === 'task' && doc.base_doc_number ? <Muted>Сформирован по заданию {doc.base_doc_number}</Muted> : null}
               <Muted>№ {doc.number} от {doc.doc_date.slice(0, 16)}{subtitle ? ` · ${subtitle}` : ''}</Muted>
               <Muted>Составил: {doc.created_by_name}</Muted>
               {doc.assignee_name ? <Text style={{ color: colors.text, fontWeight: '600', marginTop: 2 }}>
@@ -479,19 +531,54 @@ export default function DocumentScreen() {
             </View>
             <Badge text={draft ? 'черновик' : modeLabel || 'проведён'} tone={draft ? 'warn' : 'success'} />
           </View>
-          {draft && perms.operate && plan.length ? (
+          {isTask ? (
+            <Muted>Задание: {taskDone ? 'выполнено' : doc.assignee_id ? 'в работе' : 'в общем пуле'} · поставил {doc.created_by_name}</Muted>
+          ) : null}
+          {draft && taskOpen && perms.operate ? (
+            <Button title={doc.assignee_id ? `Переназначить (сейчас: ${doc.assignee_name})` : 'Поставить сотруднику'} icon="☺" variant="secondary"
+              onPress={assignMenu} />
+          ) : null}
+          {draft && taskOpen && (perms.operate || myTask) ? (
             <View style={s.rowWrap}>
-              {doc.assignee_id !== user.id ? (
-                <Button title={doc.assignee_id ? 'Забрать задание себе' : 'Взять в работу'} variant="secondary" style={{ flex: 1 }}
+              {perms.operate && doc.assignee_id !== user.id ? (
+                <Button title={doc.assignee_id ? 'Забрать себе' : 'Взять в работу'} variant="ghost" style={{ flex: 1 }}
                   onPress={() => api.takeTask(id, true).then(reload).catch(showError)} />
               ) : null}
-              {doc.assignee_id && (doc.assignee_id === user.id || perms.manageUsers) ? (
+              {doc.assignee_id && (doc.assignee_id === user.id || doc.created_by === user.id || perms.manageUsers) ? (
                 <Button title="Вернуть в общий пул" variant="ghost" style={{ flex: 1 }}
                   onPress={() => api.releaseTask(id).then(() => (doc.assignee_id === user.id ? router.back() : reload())).catch(showError)} />
               ) : null}
             </View>
           ) : null}
         </Card>
+
+        {taskDone && check ? (
+          <Card style={{ backgroundColor: check.matched ? colors.successSoft : colors.warnSoft }}>
+            <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text }}>Отчёт о выполнении</Text>
+            <Muted>Выполнил: {doc.completed_by_name ?? doc.assignee_name ?? '—'}{doc.completed_at ? `, ${doc.completed_at.slice(0, 16)}` : ''}</Muted>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginVertical: 6 }}>
+              <Badge text={`Сошлось: ${check.ok}`} tone="success" />
+              <Badge text={`${isIssue ? 'Не добрано' : 'Недостача'}: ${check.short}`} tone="danger" />
+              <Badge text={`Излишек: ${check.over + check.extra}`} tone="warn" />
+            </View>
+            {check.rows.filter((x) => x.status === 'short').map((x) => (
+              <Text key={`s${x.item_id}`} style={{ color: '#B42318' }}>− {x.item_name}: недостача {formatQty(-x.diff)} {x.unit} ({formatQty(x.fact)} из {formatQty(x.plan)})</Text>
+            ))}
+            {check.rows.filter((x) => x.status === 'over' || x.status === 'extra').map((x) => (
+              <Text key={`o${x.item_id}`} style={{ color: '#B54708' }}>+ {x.item_name}: излишек {formatQty(x.diff)} {x.unit}{x.status === 'extra' ? ' (нет в задании)' : ''}</Text>
+            ))}
+            {check.matched ? <Text style={{ color: colors.success }}>Всё сошлось с заданием.</Text> : null}
+            {doc.order_id ? (
+              <Button title={`Расходный ордер ${doc.order_number} — ${doc.order_status === 'posted' ? 'проведён' : 'ждёт проведения'}`} icon="↑" variant="secondary"
+                onPress={() => router.push({ pathname: '/doc/[id]', params: { id: String(doc.order_id) } })} />
+            ) : null}
+            {draft && (perms.operate || doc.created_by === user.id) && doc.order_status !== 'posted' ? (
+              <Button title="Вернуть задание в работу" variant="ghost"
+                onPress={() => confirm('Вернуть в работу?', doc.order_id ? `Непроведённый расходный ордер ${doc.order_number} будет удалён.` : '',
+                  () => api.reopenTask(id).then(reload).catch(showError), 'Вернуть')} />
+            ) : null}
+          </Card>
+        ) : null}
 
         {doc.type !== 'move' && !isReturn ? (
           <Card>
@@ -504,12 +591,12 @@ export default function DocumentScreen() {
               </>
             ) : null}
             {isIssue && perms.operate ? (
-              <Field label="Кому / куда (получатель или объект)" value={header.recipient} editable={canEdit}
+              <Field label="Кому / куда (получатель или объект)" value={header.recipient} editable={canEditHeader}
                 onChangeText={(recipient) => setHeader({ ...header, recipient })} onEndEditing={saveHeader} />
             ) : null}
             <Field label={isReceipt ? 'Поставщик / основание' : 'Основание (заявка, объект)'} value={header.partner}
-              editable={canEdit} onChangeText={(partner) => setHeader({ ...header, partner })} onEndEditing={saveHeader} />
-            <Field label="Комментарий" value={header.comment} editable={canEdit} multiline
+              editable={canEditHeader} onChangeText={(partner) => setHeader({ ...header, partner })} onEndEditing={saveHeader} />
+            <Field label="Комментарий" value={header.comment} editable={canEditHeader} multiline
               onChangeText={(comment) => setHeader({ ...header, comment })} onEndEditing={saveHeader} />
           </Card>
         ) : null}
@@ -646,7 +733,7 @@ export default function DocumentScreen() {
               <Button title={isIssue ? 'Добавить позицию в задание на отбор' : 'Добавить позицию в задание на приёмку'} variant="secondary" icon="☰"
                 onPress={() => { setResume(false); openItem({ purpose: 'plan' }); }} />
             ) : null}
-            {check && check.rows.some((x) => x.status === 'short') ? (
+            {perms.operate && check && check.rows.some((x) => x.status === 'short') ? (
               <Button title={isIssue ? 'Подобрать всё автоматически (FIFO, без сканирования)' : 'Принять всё по заданию (без сканирования)'}
                 variant="secondary" icon="✓"
                 onPress={() => confirm(isIssue ? 'Подобрать всё по заданию?' : 'Принять всё по заданию?',
@@ -656,7 +743,8 @@ export default function DocumentScreen() {
                     if (res.shortage > 0) notify('Не хватает на складе', `Не хватило ${formatQty(res.shortage)} ед.`);
                   }).catch(showError), isIssue ? 'Подобрать' : 'Принять')} />
             ) : null}
-            <Button title="Удалить черновик" variant="danger"
+{!isTask || perms.operate ? (
+                          <Button title="Удалить черновик" variant="danger"
               onPress={() => confirm('Удалить документ?', doc.number, async () => {
                 try {
                   await api.deleteDocument(id);
@@ -665,6 +753,7 @@ export default function DocumentScreen() {
                   showError(e);
                 }
               })} />
+            ) : null}
           </View>
         ) : null}
 
@@ -690,14 +779,18 @@ export default function DocumentScreen() {
         ) : null}
       </ScrollView>
 
-      {draft && (canEdit || isReturn) ? (
+      {draft && (canEdit || isReturn || (taskDone && isReceipt && perms.operate)) ? (
         <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: 12, paddingBottom: 28,
           backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.border, flexDirection: 'row', gap: 8 }}>
           {canEdit ? <Button title="Сканировать" icon="⌗" style={{ flex: 1 }} onPress={() => setScanOpen(true)} /> : null}
-          {isReceipt ? (
+          {taskOpen && canEdit ? (
+            <Button title="Завершить" icon="✓" variant={isReceipt && perms.operate ? 'secondary' : 'success'} style={{ flex: 1 }} busy={busy}
+              onPress={finishTask} />
+          ) : null}
+          {isReceipt && perms.operate ? (
             <Button title="Провести" variant="success" style={{ flex: 1 }} busy={busy} disabled={!lines.length} onPress={postReceipt} />
           ) : null}
-          {isIssue && (perms.operate || perms.custody) ? (
+          {isIssue && !isTask && (perms.operate || (perms.custody && doc.source !== 'task')) ? (
             <Button title={perms.operate ? 'Провести' : 'Взять себе'} variant="success" style={{ flex: 1 }} busy={busy}
               disabled={!lines.length} onPress={postIssue} />
           ) : null}
@@ -717,7 +810,7 @@ export default function DocumentScreen() {
               : 'QR короба или ячейки — содержимое; ШК/QR товара — изъять (короб сканировать не обязательно)'
             : 'ШК/QR товара — добавить в заявку'}
       />
-      <ItemPicker visible={itemPick !== null} newBarcode={itemPick?.barcode} allowCreate={isReceipt && perms.manageItems}
+      <ItemPicker visible={itemPick !== null} newBarcode={itemPick?.barcode} allowCreate={isReceipt && (perms.manageItems || (perms.operate && !!itemPick?.barcode))}
         onClose={() => setItemPick(null)}
         onPick={(item) => {
           const purpose = itemPick?.purpose;

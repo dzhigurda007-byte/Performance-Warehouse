@@ -28,7 +28,7 @@ export default function UsersScreen() {
               <ListRow key={u.id} title={u.full_name}
                 subtitle={[u.position, u.department_name, u.supervisor_name ? `рук.: ${u.supervisor_name}` : null, `@${u.login}`].filter(Boolean).join(' · ')}
                 right={u.active ? '›' : <Badge text="заблокирован" tone="danger" />}
-                onPress={p.manageUsers && (p.administer || rank(u.role) < rank(p.role))
+                onPress={p.manageUsers && (p.develop || rank(u.role) < rank(p.role))
                   ? () => router.push({ pathname: '/user/[id]', params: { id: String(u.id) } }) : undefined} />
             ))}
           </View>

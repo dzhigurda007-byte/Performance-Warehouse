@@ -117,9 +117,12 @@ export function ItemPicker({ visible, onClose, onPick, allowCreate = true, newBa
     setCreating(true);
   }
 
+  // ШК пришёл со сканера — его проставляет система, товар заводится «на месте» (кладовщик и выше)
+  const fromScan = !!newBarcode && form.barcode === newBarcode;
+
   async function create() {
     try {
-      const id = await api.saveItem(form);
+      const id = fromScan ? await api.createItemFromScan(form) : await api.saveItem(form);
       const item = await api.getItem(id);
       if (item) onPick(item);
     } catch (e) {
@@ -128,15 +131,23 @@ export function ItemPicker({ visible, onClose, onPick, allowCreate = true, newBa
   }
 
   return (
-    <Sheet visible={visible} title={creating ? 'Новый товар' : 'Выбор товара'} onClose={onClose}>
+    <Sheet visible={visible} title={creating ? (fromScan ? 'Новый товар по штрихкоду' : 'Новый товар') : 'Выбор товара'} onClose={onClose}>
       {creating ? (
         <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
-          <Field label="Наименование *" value={form.name} onChangeText={(name) => setForm({ ...form, name })} autoFocus />
+          {fromScan ? (
+            <View style={[s.card, { backgroundColor: colors.warnSoft, marginBottom: 12 }]}>
+              <Text style={{ color: colors.text, fontWeight: '600' }}>Штрихкода {form.barcode} нет в базе</Text>
+              <Text style={{ color: colors.text }}>Заполните полное наименование и артикул — штрихкод проставлен автоматически, товар сразу попадёт в номенклатуру и в приёмку.</Text>
+            </View>
+          ) : null}
+          <Field label={fromScan ? 'Наименование полное *' : 'Наименование *'} value={form.name} multiline={fromScan}
+            placeholder={fromScan ? 'напр. Кухонный комбайн Bosch MUM5, 1000 Вт, белый' : undefined}
+            onChangeText={(name) => setForm({ ...form, name })} autoFocus />
           <Field label="Артикул *" value={form.sku} autoCapitalize="characters"
             onChangeText={(sku) => setForm({ ...form, sku })} />
           <Field label="Единица измерения" value={form.unit} onChangeText={(unit) => setForm({ ...form, unit })} />
-          <Field label="Штрихкод производителя (EAN)" value={form.barcode} keyboardType="number-pad"
-            onChangeText={(barcode) => setForm({ ...form, barcode })} />
+          <Field label={fromScan ? 'Штрихкод (проставлен системой)' : 'Штрихкод производителя (EAN)'} value={form.barcode} keyboardType="number-pad"
+            editable={!fromScan} onChangeText={(barcode) => setForm({ ...form, barcode })} />
           <Button title="Создать и выбрать" onPress={create} />
           <Button title="Назад к списку" variant="ghost" onPress={() => setCreating(false)} />
         </ScrollView>

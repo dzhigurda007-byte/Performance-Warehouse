@@ -24,9 +24,9 @@ export default function TabsLayout() {
       }}
     >
       <Tabs.Screen name="index" options={{ title: 'Операции', tabBarIcon: icon('⌂'), href: p.takeForSelf ? undefined : null }} />
-      <Tabs.Screen name="tasks" options={{ title: 'Задания', tabBarIcon: icon('☑'), href: p.operate ? undefined : null }} />
+      <Tabs.Screen name="tasks" options={{ title: 'Задания', tabBarIcon: icon('☑') }} />
       <Tabs.Screen name="storage" options={{ title: 'Склад', tabBarIcon: icon('▦'), href: p.operate ? undefined : null }} />
-      <Tabs.Screen name="stock" options={{ title: 'Остатки', tabBarIcon: icon('▤'), href: p.viewStock ? undefined : null }} />
+      <Tabs.Screen name="stock" options={{ title: 'Остатки', tabBarIcon: icon('▤'), href: p.stockTab ? undefined : null }} />
       <Tabs.Screen name="items" options={{ title: 'Справочник', tabBarIcon: icon('◫'), href: p.manageItems ? undefined : null }} />
       <Tabs.Screen name="custody" options={{ title: 'Выдачи', tabBarIcon: icon('⇆'), href: p.custody ? undefined : null }} />
       <Tabs.Screen name="more" options={{ title: 'Ещё', tabBarIcon: icon('☰') }} />

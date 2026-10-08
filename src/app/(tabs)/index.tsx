@@ -45,7 +45,7 @@ export default function HomeScreen() {
     return { drafts: docs.length - tasks, returns: returns.length, tasks };
   }, [api, p.operate, p.custody]);
 
-  if (!p.takeForSelf) return <Redirect href={p.custody ? '/custody' : '/more'} />;
+  if (!p.takeForSelf) return <Redirect href="/tasks" />;
 
   async function newDoc(type: DocType, mode: DocMode) {
     try {

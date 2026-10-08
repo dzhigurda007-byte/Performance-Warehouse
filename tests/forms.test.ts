@@ -9,7 +9,7 @@ const doc = (o: Partial<DocumentRow>): DocumentRow => ({
   id: 1, type: 'receipt', mode: 'fact', number: 'ПО-000012', doc_date: '2026-10-06 10:00:00', status: 'posted',
   partner: 'ООО Поставщик', recipient: null, comment: null, created_by: 1, created_by_name: 'Иванов И.И.',
   posted_by: 1, posted_by_name: 'Петров П.П.', posted_at: '2026-10-06 11:30:00', lines_count: 1, post_mode: null,
-  source: 'manual', base_doc_id: null, base_doc_number: null, warehouse_id: 1, warehouse_name: 'Основной', plan_count: 0, plan_qty: 0, lines_qty: 0, assignee_id: null, assignee_name: null, assigned_at: null, ...o,
+  source: 'manual', base_doc_id: null, base_doc_number: null, warehouse_id: 1, warehouse_name: 'Основной', plan_count: 0, plan_qty: 0, lines_qty: 0, assignee_id: null, assignee_name: null, assigned_at: null, task_status: null, completed_by: null, completed_by_name: null, completed_at: null, order_id: null, order_number: null, order_status: null, ...o,
 });
 const line = (o: Partial<DocLine>): DocLine => ({
   id: 1, doc_id: 1, item_id: 1, sku: 'KOMB', item_name: 'Комбайн <Bosch>', unit: 'шт', barcode: null, qty: 3,

@@ -32,10 +32,13 @@ const DOC_SELECT = `
     (SELECT COUNT(*) FROM doc_plan p WHERE p.doc_id = d.id) AS plan_count,
     (SELECT IFNULL(SUM(qty), 0) FROM doc_plan p WHERE p.doc_id = d.id) AS plan_qty,
     (SELECT IFNULL(SUM(qty), 0) FROM doc_lines l WHERE l.doc_id = d.id) AS lines_qty,
-    au.full_name AS assignee_name
+    au.full_name AS assignee_name, cu.full_name AS completed_by_name,
+    od.id AS order_id, od.number AS order_number, od.status AS order_status
   FROM documents d
   JOIN users u ON u.id = d.created_by
   LEFT JOIN users au ON au.id = d.assignee_id
+  LEFT JOIN users cu ON cu.id = d.completed_by
+  LEFT JOIN documents od ON od.id = (SELECT MAX(o.id) FROM documents o WHERE o.base_doc_id = d.id AND o.source = 'task')
   LEFT JOIN users pu ON pu.id = d.posted_by
   LEFT JOIN documents bd ON bd.id = d.base_doc_id
   LEFT JOIN warehouses wh ON wh.id = d.warehouse_id`;
@@ -46,10 +49,26 @@ async function getDocRaw(db: DB, id: number) {
   return d;
 }
 
-/** Кто может работать с черновиком: кладовщик и выше — с любым, сотрудник — только со своим расходом. */
+/**
+ * Задание видно: руководителю и администратору — любое; остальным — свободное (общий пул),
+ * назначенное им самим или поставленное ими. Выполненное задание видят кладовщики (проводят ордер).
+ */
+function canSeeTask(ctx: Ctx, d: Pick<DocumentRow, 'task_status' | 'assignee_id' | 'created_by'>) {
+  if (!d.task_status || can.manageUsers(ctx.user.role)) return true;
+  if (d.task_status === 'done' && can.operate(ctx.user.role)) return true;
+  return !d.assignee_id || d.assignee_id === ctx.user.id || d.created_by === ctx.user.id;
+}
+
+/**
+ * Кто может работать с черновиком: кладовщик и выше — с любым, сотрудник — со своим расходом,
+ * исполнитель задания (любая роль) — со строками своего задания.
+ */
 async function assertCanEdit(ctx: Ctx, docId: number) {
   const d = await getDocRaw(ctx.db, docId);
   if (d.status !== 'draft') throw new BusinessError('Документ проведён — сначала отмените проведение');
+  if (d.task_status === 'done') throw new BusinessError('Задание выполнено — чтобы изменить, верните его в работу');
+  if (d.task_status === 'open' && d.assignee_id === ctx.user.id) return d;
+  if (d.task_status && !canSeeTask(ctx, d)) deny('задание назначено другому сотруднику');
   if (can.operate(ctx.user.role)) return d;
   if (d.type === 'issue' && d.created_by === ctx.user.id && can.takeForSelf(ctx.user.role)) return d;
   deny('изменение документа');
@@ -82,7 +101,11 @@ async function writeMove(db: DB, m: {
 async function markPosted(db: DB, docId: number, userId: number, postMode: PostMode | null = null) {
   // исполнитель — кто взял задание; если не брал никто, исполнителем становится проводящий
   await db.runAsync(`UPDATE documents SET status = 'posted', posted_by = ?, posted_at = datetime('now','localtime'),
-    post_mode = COALESCE(?, post_mode), assignee_id = COALESCE(assignee_id, ?) WHERE id = ?`, userId, postMode, userId, docId);
+    post_mode = COALESCE(?, post_mode), assignee_id = COALESCE(assignee_id, ?),
+    task_status = CASE WHEN task_status IS NULL THEN NULL ELSE 'done' END,
+    completed_by = CASE WHEN task_status IS NULL THEN completed_by ELSE COALESCE(completed_by, ?) END,
+    completed_at = CASE WHEN task_status IS NULL THEN completed_at ELSE COALESCE(completed_at, datetime('now','localtime')) END
+    WHERE id = ?`, userId, postMode, userId, userId, docId);
 }
 
 export async function createReturnReceipt(db: DB, issueDocId: number): Promise<number | null> {
@@ -109,21 +132,33 @@ export async function createReturnReceipt(db: DB, issueDocId: number): Promise<n
 }
 
 export const documents = {
-  async list(ctx: Ctx, f: { type?: DocType; status?: 'draft' | 'posted'; source?: string; mode?: DocMode; task?: boolean } = {}) {
+  async list(ctx: Ctx, f: { type?: DocType; status?: 'draft' | 'posted'; source?: string; mode?: DocMode; task?: boolean; taskStatus?: 'open' | 'done' } = {}) {
     const where: string[] = [];
     const args: (string | number)[] = [];
     if (f.type) { where.push('d.type = ?'); args.push(f.type); }
     if (f.status) { where.push('d.status = ?'); args.push(f.status); }
     if (f.source) { where.push('d.source = ?'); args.push(f.source); }
     if (f.mode) { where.push('d.mode = ?'); args.push(f.mode); }
-    if (f.task) where.push('EXISTS (SELECT 1 FROM doc_plan p WHERE p.doc_id = d.id)');
-    if (!can.operate(ctx.user.role)) { where.push('d.created_by = ?'); args.push(ctx.user.id); }
+    if (f.task || f.taskStatus) {
+      where.push('d.task_status IS NOT NULL');
+      if (f.taskStatus) { where.push('d.task_status = ?'); args.push(f.taskStatus); }
+      if (!can.manageUsers(ctx.user.role)) {
+        // видимость заданий: пул, свои, поставленные мной; выполненные — кладовщикам (для проведения)
+        where.push(`(d.assignee_id IS NULL OR d.assignee_id = ? OR d.created_by = ?${can.operate(ctx.user.role) ? " OR d.task_status = 'done'" : ''})`);
+        args.push(ctx.user.id, ctx.user.id);
+      }
+    } else if (!can.operate(ctx.user.role)) { where.push('d.created_by = ?'); args.push(ctx.user.id); }
+    else if (f.status === 'draft') where.push("NOT (d.type = 'issue' AND IFNULL(d.task_status, '') = 'done')");
     return ctx.db.getAllAsync<DocumentRow>(
       `${DOC_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY d.id DESC LIMIT 500`, ...args);
   },
 
   async get(ctx: Ctx, id: number) {
     const d = await getDocRaw(ctx.db, id);
+    if (d.task_status) {
+      if (!canSeeTask(ctx, d)) deny('задание назначено другому сотруднику');
+      return d;
+    }
     if (!can.operate(ctx.user.role) && d.created_by !== ctx.user.id && !(await canPostReturn(ctx, d))) deny('просмотр документа');
     return d;
   },
@@ -146,18 +181,23 @@ export const documents = {
       WHERE l.doc_id = ?
       ORDER BY w.code, r.code, c.code, b.code, l.id`, docId),
 
-  async create(ctx: Ctx, type: DocType, mode: DocMode, opts: { warehouseId?: number | null; source?: string } = {}) {
-    if (type === 'issue') need(ctx, can.takeForSelf, 'оформление расхода');
+  /** opts.task — задание (приёмка / отбор) для общего пула; assigneeId — сразу поставить сотруднику. */
+  async create(ctx: Ctx, type: DocType, mode: DocMode, opts: { warehouseId?: number | null; source?: string; task?: boolean; assigneeId?: number | null } = {}) {
+    if (type === 'issue' && !opts.task) need(ctx, can.takeForSelf, 'оформление расхода');
     else need(ctx, can.operate);
+    if (opts.task && type === 'move') throw new BusinessError('Задание бывает на приёмку или на отбор');
     const n = await nextSeq(ctx.db, `seq_${type}`);
     const r = await ctx.db.runAsync(
-      'INSERT INTO documents(type, mode, number, created_by, warehouse_id, source) VALUES(?, ?, ?, ?, ?, ?)',
-      type, mode, formatDocNumber(type, n), ctx.user.id, opts.warehouseId ?? null, opts.source ?? 'manual');
+      `INSERT INTO documents(type, mode, number, created_by, warehouse_id, source, task_status, assignee_id, assigned_at)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN NULL ELSE datetime('now','localtime') END)`,
+      type, opts.task ? 'plan' : mode, formatDocNumber(type, n), ctx.user.id, opts.warehouseId ?? null, opts.source ?? 'manual',
+      opts.task ? 'open' : null, opts.task ? opts.assigneeId ?? null : null, opts.task ? opts.assigneeId ?? null : null);
     return r.lastInsertRowId;
   },
 
   async updateHeader(ctx: Ctx, id: number, h: { partner?: string; recipient?: string; comment?: string; warehouseId?: number | null }) {
-    await assertCanEdit(ctx, id);
+    const d = await assertCanEdit(ctx, id);
+    if (d.task_status && !can.operate(ctx.user.role)) deny('изменение задания (исполнитель меняет только строки)');
     await ctx.db.runAsync(`UPDATE documents SET partner = ?, recipient = ?, comment = ?,
       warehouse_id = COALESCE(?, warehouse_id) WHERE id = ?`,
     emptyToNull(h.partner), emptyToNull(h.recipient), emptyToNull(h.comment), h.warehouseId ?? null, id);
@@ -165,6 +205,7 @@ export const documents = {
 
   async remove(ctx: Ctx, id: number) {
     const d = await assertCanEdit(ctx, id);
+    if (d.task_status && !can.operate(ctx.user.role)) deny('удаление задания');
     if (d.source === 'return') {
       await ctx.db.runAsync('UPDATE custody SET return_doc_id = NULL WHERE return_doc_id = ?', id);
     }
@@ -272,8 +313,8 @@ export const documents = {
     let docId = 0;
     await inTransaction(ctx.db, async (t) => {
       const n = await nextSeq(t, 'seq_receipt');
-      docId = (await t.runAsync(`INSERT INTO documents(type, mode, number, created_by, warehouse_id, source, comment)
-        VALUES('receipt', 'plan', ?, ?, ?, 'excel', ?)`,
+      docId = (await t.runAsync(`INSERT INTO documents(type, mode, number, created_by, warehouse_id, source, comment, task_status)
+        VALUES('receipt', 'plan', ?, ?, ?, 'excel', ?, 'open')`,
       formatDocNumber('receipt', n), ctx.user.id, warehouseId, emptyToNull(comment) ?? 'Загружен из Excel')).lastInsertRowId;
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
@@ -319,7 +360,7 @@ export const documents = {
         await t.runAsync(`INSERT INTO doc_plan(doc_id, item_id, qty) VALUES(?, ?, ?)
           ON CONFLICT(doc_id, item_id) DO UPDATE SET qty = excluded.qty`, docId, itemId, round3(qty));
       }
-      await t.runAsync("UPDATE documents SET mode = 'plan' WHERE id = ?", docId);
+      await t.runAsync("UPDATE documents SET mode = 'plan', task_status = COALESCE(task_status, 'open') WHERE id = ?", docId);
     });
   },
 
@@ -345,6 +386,7 @@ export const documents = {
    */
   async fillFromPlan(ctx: Ctx, docId: number) {
     const d = await assertCanEdit(ctx, docId);
+    need(ctx, can.operate, 'выполнение задания без сканирования');
     if (d.type === 'move') throw new BusinessError('Только для приходного или расходного ордера');
     const plan = await documents.plan(ctx, docId);
     if (!plan.length) throw new BusinessError('В документе нет задания');
@@ -359,24 +401,90 @@ export const documents = {
     return { shortage };
   },
 
-  /** Взять задание в работу: кладовщик становится исполнителем, его ФИО попадает в ордер. */
+  /**
+   * Взять задание из общего пула (любая роль): исполнитель — его ФИО попадает в ордер.
+   * force — забрать назначенное другому (кладовщик и выше).
+   */
   async takeTask(ctx: Ctx, docId: number, force = false) {
-    need(ctx, can.operate);
     const d = await getDocRaw(ctx.db, docId);
-    if (d.status !== 'draft') throw new BusinessError('Задание уже выполнено');
+    if (!d.task_status) throw new BusinessError('Это не задание');
+    if (d.task_status === 'done' || d.status !== 'draft') throw new BusinessError('Задание уже выполнено');
     if (d.assignee_id === ctx.user.id) return d.assignee_id;
-    if (d.assignee_id && !force) throw new BusinessError(`Задание уже в работе у ${d.assignee_name}`, 'busy');
+    if (d.assignee_id) {
+      if (!force) throw new BusinessError(`Задание уже в работе у ${d.assignee_name}`, 'busy');
+      need(ctx, can.operate, 'перераспределение заданий');
+    }
     await ctx.db.runAsync(`UPDATE documents SET assignee_id = ?, assigned_at = datetime('now','localtime') WHERE id = ?`, ctx.user.id, docId);
     return ctx.user.id;
   },
 
-  /** Вернуть задание в общий пул. */
-  async releaseTask(ctx: Ctx, docId: number) {
-    need(ctx, can.operate);
+  /** Поставить задание конкретному сотруднику (null — в общий пул). Кладовщик и выше. */
+  async assignTask(ctx: Ctx, docId: number, userId: number | null) {
+    need(ctx, can.operate, 'назначение заданий');
     const d = await getDocRaw(ctx.db, docId);
-    if (d.status !== 'draft') throw new BusinessError('Задание уже выполнено');
-    if (d.assignee_id && d.assignee_id !== ctx.user.id && !can.manageUsers(ctx.user.role)) deny('снятие чужого задания');
+    if (!d.task_status) throw new BusinessError('Это не задание');
+    if (d.task_status === 'done' || d.status !== 'draft') throw new BusinessError('Задание уже выполнено');
+    if (userId) {
+      const u = await ctx.db.getFirstAsync<{ active: number }>('SELECT active FROM users WHERE id = ?', userId);
+      if (!u?.active) throw new BusinessError('Сотрудник не найден или заблокирован');
+    }
+    await ctx.db.runAsync(`UPDATE documents SET assignee_id = ?, assigned_at = CASE WHEN ? IS NULL THEN NULL ELSE datetime('now','localtime') END
+      WHERE id = ?`, userId, userId, docId);
+  },
+
+  /** Вернуть задание в общий пул: исполнитель, постановщик или руководитель. */
+  async releaseTask(ctx: Ctx, docId: number) {
+    const d = await getDocRaw(ctx.db, docId);
+    if (d.task_status !== 'open' || d.status !== 'draft') throw new BusinessError('Задание уже выполнено');
+    if (d.assignee_id && d.assignee_id !== ctx.user.id && d.created_by !== ctx.user.id && !can.manageUsers(ctx.user.role)) {
+      deny('снятие чужого задания');
+    }
     await ctx.db.runAsync('UPDATE documents SET assignee_id = NULL, assigned_at = NULL WHERE id = ?', docId);
+  },
+
+  /**
+   * Завершить задание: оно возвращается постановщику с отчётом (недостачи / излишки считаются по плану).
+   * По заданию на отбор формируется расходный ордер «на основании» — провести его может кладовщик и выше.
+   * Приёмку после завершения проводит кладовщик и выше (товар уходит в буферную ячейку).
+   */
+  async completeTask(ctx: Ctx, docId: number) {
+    const d = await getDocRaw(ctx.db, docId);
+    if (d.task_status !== 'open' || d.status !== 'draft') throw new BusinessError('Задание уже выполнено');
+    if (d.assignee_id !== ctx.user.id && !can.operate(ctx.user.role)) deny('завершение чужого задания');
+    let orderId: number | null = null;
+    await inTransaction(ctx.db, async (t) => {
+      await t.runAsync(`UPDATE documents SET task_status = 'done', completed_by = ?, completed_at = datetime('now','localtime'),
+        assignee_id = COALESCE(assignee_id, ?) WHERE id = ?`, ctx.user.id, ctx.user.id, docId);
+      if (d.type !== 'issue') return;
+      const lines = await t.getAllAsync<{ item_id: number; qty: number; cell_id: number | null; box_id: number | null }>(
+        'SELECT item_id, qty, cell_id, box_id FROM doc_lines WHERE doc_id = ? ORDER BY id', docId);
+      if (!lines.length) return; // ничего не отобрано — ордер не нужен, отчёт покажет недостачу
+      const n = await nextSeq(t, 'seq_issue');
+      orderId = (await t.runAsync(`INSERT INTO documents(type, mode, number, created_by, warehouse_id, source, base_doc_id,
+          partner, recipient, comment, assignee_id)
+        VALUES('issue', 'fact', ?, ?, ?, 'task', ?, ?, ?, ?, ?)`,
+      formatDocNumber('issue', n), d.created_by, d.warehouse_id, docId, d.partner, d.recipient,
+      `По заданию на отбор ${d.number}${d.comment ? ` · ${d.comment}` : ''}`, d.assignee_id ?? ctx.user.id)).lastInsertRowId;
+      for (const l of lines) {
+        await t.runAsync('INSERT INTO doc_lines(doc_id, item_id, qty, cell_id, box_id) VALUES(?, ?, ?, ?, ?)',
+          orderId, l.item_id, l.qty, l.cell_id, l.box_id);
+      }
+      // план копируется — в ордере видна сверка с заданием
+      await t.runAsync('INSERT INTO doc_plan(doc_id, item_id, qty) SELECT ?, item_id, qty FROM doc_plan WHERE doc_id = ?', orderId, docId);
+    });
+    return { orderId };
+  },
+
+  /** Вернуть выполненное задание в работу (постановщик, кладовщик и выше); непроведённый ордер по нему удаляется. */
+  async reopenTask(ctx: Ctx, docId: number) {
+    const d = await getDocRaw(ctx.db, docId);
+    if (d.task_status !== 'done' || d.status !== 'draft') throw new BusinessError('Задание не выполнено или уже проведено');
+    if (d.created_by !== ctx.user.id) need(ctx, can.operate, 'возврат задания в работу');
+    if (d.order_id && d.order_status === 'posted') throw new BusinessError(`Расходный ордер ${d.order_number} уже проведён — сначала отмените его проведение`);
+    await inTransaction(ctx.db, async (t) => {
+      if (d.order_id) await t.runAsync('DELETE FROM documents WHERE id = ?', d.order_id);
+      await t.runAsync("UPDATE documents SET task_status = 'open', completed_by = NULL, completed_at = NULL WHERE id = ?", docId);
+    });
   },
 
   // ---------------------------------------------------------------- распределение по получателям
@@ -457,6 +565,8 @@ export const documents = {
     const d = await getDocRaw(db, docId);
     if (d.type !== 'issue') throw new BusinessError('Это не расходный ордер');
     if (d.status !== 'draft') throw new BusinessError('Документ уже проведён');
+    if (d.task_status) throw new BusinessError('Задание на отбор не проводится: завершите его — сформируется расходный ордер, его и проведите');
+    if (d.source === 'task') need(ctx, can.operate, 'проведение расходного ордера по заданию');
     const role = ctx.user.role;
     if (mode === 'writeoff') need(ctx, can.operate, 'списание');
     else {

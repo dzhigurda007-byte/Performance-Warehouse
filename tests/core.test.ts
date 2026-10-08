@@ -185,7 +185,9 @@ test('выдача 10 лопат и 10 пар перчаток десяти ра
   // остальное возвращает кладовщик за них; одна лопата утеряна
   const rest = (await K.issuedCustody({ scope: 'mine', active: true })).filter((k) => k.status === 'held');
   assert.equal(rest.length, 18);
-  const res = await K.returnCustody(rest.map((k, i) => ({ custodyId: k.id, condition: i === 0 ? 'lost' as const : undefined })));
+  // утеряна именно лопата (порядок выдач с одинаковым временем не определён — выбираем явно)
+  const lostId = rest.find((k) => k.item_id === shovel)!.id;
+  const res = await K.returnCustody(rest.map((k) => ({ custodyId: k.id, condition: k.id === lostId ? 'lost' as const : undefined })));
   assert.equal(res.receipts.length, 1); // всё вернули → сформирован приходный ордер
 
   const receipt = res.receipts[0];
@@ -291,7 +293,9 @@ test('отчёт «Остатки»: группы и подгруппы, отб�
   assert.deepEqual(stockItems(rows, [], { sort: 'date' }).map((i) => i.sku)[0], 'KOMB');
   assert.equal((await K.stockReport({ search: 'дрел' })).length, 1);
 
-  await assert.rejects(as('w1').stockReport({}), /прав|доступ/i);
+  // остатки разнорабочий видит (нужно для отбора по заданию), историю движений — нет
+  assert.ok((await as('w1').stockReport({})).length > 0);
+  await assert.rejects(as('w1').listMoves({}), /прав|доступ/i);
 });
 
 test('задание на приёмку: сканирование по ШК, сверка красный / зелёный / жёлтый, всё в буфер', async () => {
@@ -339,8 +343,10 @@ test('задания: общий пул, кладовщик берёт зада�
 
   await K.takeTask(task);
   await assert.rejects(K2.takeTask(task), /в работе у keeper ФИО/);
-  pool = await K2.listDocuments({ status: 'draft', task: true });
-  assert.equal(pool[0].assignee_name, 'keeper ФИО');
+  // назначенное задание видят исполнитель, постановщик и руководитель — другой кладовщик нет
+  assert.equal((await K2.listDocuments({ status: 'draft', task: true })).length, 0);
+  await assert.rejects(K2.getDocument(task), /другому сотруднику/);
+  assert.equal((await B.listDocuments({ status: 'draft', task: true }))[0].assignee_name, 'keeper ФИО');
 
   // отбор по факту: 6 из ячейки A + 3 из B, лопат на складе только 2
   await K.addLine(task, { itemId: gloves, qty: 6, cellId: cellA });
@@ -355,13 +361,18 @@ test('задания: общий пул, кладовщик берёт зада�
   chk = receiptCheck(await K.docPlan(task), await K.listLines(task));
   assert.deepEqual(chk.rows.map((x) => [x.sku, x.fact, x.status]), [['GLOVES', 8, 'ok'], ['SHOVEL', 2, 'short']]);
 
-  await K.postIssue(task, 'writeoff');
-  const posted = await K.getDocument(task);
-  assert.equal(posted.assignee_name, 'keeper ФИО');
-  assert.equal((await K.listDocuments({ status: 'draft', task: true })).length, 0);
+  // задание на отбор не проводится — завершается, по нему формируется расходный ордер
+  await assert.rejects(K.postIssue(task, 'writeoff'), /завершите его/);
+  const { orderId } = await K.completeTask(task);
+  const order = await K.getDocument(orderId!);
+  assert.deepEqual([order.type, order.source, order.base_doc_id, order.assignee_name], ['issue', 'task', task, 'keeper ФИО']);
+  await K.postIssue(orderId!, 'writeoff');
+  const done = await B.getDocument(task);
+  assert.deepEqual([done.task_status, done.completed_by_name, done.order_id, done.order_status], ['done', 'keeper ФИО', orderId, 'posted']);
+  assert.equal((await K.listDocuments({ taskStatus: 'open' })).length, 0);
 
   // задание никто не брал — исполнителем становится проводящий
-  const rt = await B.createDocument('receipt', 'plan', { warehouseId: whId });
+  const rt = await B.createDocument('receipt', 'plan', { warehouseId: whId, task: true });
   await B.setPlanQty(rt, gloves, 1);
   await K2.addLine(rt, { itemId: gloves, qty: 1 });
   await K2.postReceipt(rt);
@@ -565,4 +576,103 @@ test('генератор коробов: N коробов со сквозной 
   await assert.rejects(K.createBoxes({ count: 0 }), /от 1 до 1000/);
   await assert.rejects(K.createBoxes({ count: 1001 }), /от 1 до 1000/);
   await assert.rejects(as('emp').createBoxes({ count: 1 }), /прав|доступ/i);
+});
+
+test('задания: поставить сотруднику, выполнить разнорабочим, отчёт постановщику, проводит кладовщик', async () => {
+  await receive('keeper', [{ itemId: gloves, qty: 10, cellId: cellA }]);
+  const B = as('boss');
+  const K = as('keeper');
+  const W = as('w1');
+  const W2 = as('w2');
+
+  // приёмка: поставлена конкретному разнорабочему
+  const rt = await B.createDocument('receipt', 'plan', { warehouseId: whId, task: true, assigneeId: people.w1.id });
+  await B.setPlanQty(rt, shovel, 3);
+  await B.setPlanQty(rt, gloves, 2);
+  assert.deepEqual((await W.listDocuments({ task: true })).map((d) => d.id), [rt]);
+  assert.equal((await W2.listDocuments({ task: true })).length, 0); // чужое назначенное не видно
+  assert.equal((await K.listDocuments({ task: true })).length, 0); // и кладовщику (не постановщик)
+  await assert.rejects(W2.addLineByCode(rt, '4600000000011', 1), /другому сотруднику/);
+
+  // исполнитель сканирует; шапку, план и удаление не трогает; провести не может
+  await W.addLineByCode(rt, '4600000000011', 1);
+  await W.addLineByCode(rt, '4600000000011', 1);
+  await W.addLineByCode(rt, '4600000000028', 3);
+  await assert.rejects(W.updateDocumentHeader(rt, { partner: 'x' }), /исполнитель меняет только строки/);
+  await assert.rejects(W.setPlanQty(rt, shovel, 10), /прав|доступ/i);
+  await assert.rejects(W.deleteDocument(rt), /удаление задания/);
+  await assert.rejects(W.fillFromPlan(rt), /прав|доступ/i);
+  await assert.rejects(W.postReceipt(rt), /прав|доступ/i);
+  // ШК нет в базе — разнорабочий не заводит, кладовщик заводит на месте
+  await assert.rejects(W.createItemFromScan({ barcode: '4609999999999', name: 'Кабель ВВГ 3×2,5', sku: 'VVG-3' }), /кладовщик/);
+
+  // завершение: отчёт постановщику — лопат 2 из 3, перчаток 3 из 2
+  assert.deepEqual(await W.completeTask(rt), { orderId: null });
+  await assert.rejects(W.addLineByCode(rt, '4600000000011', 1), /Задание выполнено/);
+  const rep = await B.getDocument(rt);
+  assert.deepEqual([rep.task_status, rep.completed_by_name], ['done', 'w1 ФИО']);
+  const chk = receiptCheck(await B.docPlan(rt), await B.listLines(rt));
+  assert.deepEqual(chk.rows.map((x) => [x.sku, x.status, x.diff]), [['SHOVEL', 'short', -1], ['GLOVES', 'over', 1]]);
+  // выполненное видят кладовщики — проводит кладовщик
+  assert.ok((await K.listDocuments({ task: true })).some((d) => d.id === rt));
+  await K.postReceipt(rt);
+  assert.equal((await K.getDocument(rt)).status, 'posted');
+
+  // отбор: поставлен в пул, взял сотрудник, по завершении — расходный ордер; сотрудник его не проводит
+  const pt = await K.createDocument('issue', 'plan', { task: true });
+  await K.setPlanQty(pt, gloves, 4);
+  const E = as('emp');
+  await E.takeTask(pt);
+  await E.addLine(pt, { itemId: gloves, qty: 4, cellId: cellA });
+  await E.completeTask(pt);
+  await assert.rejects(E.completeTask(pt), /уже выполнено/);
+  const order = (await K.getDocument(pt)).order_id!;
+  await assert.rejects(E.postIssue(order, 'custody'), /прав|доступ/i);
+  await assert.rejects(E.postIssue(order, 'writeoff'), /прав|доступ/i);
+  // вернуть в работу: непроведённый ордер удаляется
+  await K.reopenTask(pt);
+  assert.equal((await K.getDocument(pt)).task_status, 'open');
+  assert.equal((await K.getDocument(pt)).order_id, null);
+  await E.completeTask(pt);
+  await K.postIssue((await K.getDocument(pt)).order_id!, 'writeoff');
+  assert.equal((await K.stockLooseInCell(cellA)).find((x) => x.sku === 'GLOVES')!.qty, 6);
+  await assert.rejects(K.reopenTask(pt), /проведён/);
+
+  // назначение: кладовщик ставит задание сотруднику; руководитель видит всё
+  const t3 = await K.createDocument('issue', 'plan', { task: true });
+  await K.assignTask(t3, people.w2.id);
+  assert.equal((await W2.listDocuments({ task: true, taskStatus: 'open' }))[0].id, t3);
+  await assert.rejects(W.assignTask(t3, people.w1.id), /прав|доступ/i);
+  assert.ok((await B.listDocuments({ task: true })).length >= 3);
+});
+
+test('права: руководитель — полные (настройки, отделы), «Разработчик» — только администратор', async () => {
+  const B = as('boss');
+  await B.saveSettings({ custodyEnabled: false });
+  await B.saveDepartment({ name: 'Склад №2' });
+  await assert.rejects(B.devInfo(), /Разработчик/);
+  const info = await as('admin').devInfo();
+  assert.ok(info.schemaVersion >= 9);
+  assert.ok(info.tables.find((t) => t.name === 'documents'));
+  // руководитель не назначает роль администратора и не правит администратора
+  await assert.rejects(B.updateUser(people.keeper.id, { role: 'admin' }), /роли/);
+  await assert.rejects(B.updateUser(people.admin.id, { position: 'x' }), /такой же или более высокой/);
+});
+
+test('приёмка: новый ШК — кладовщик заводит товар на месте, штрихкод ставит система', async () => {
+  const K = as('keeper');
+  await assert.rejects(K.createItemFromScan({ barcode: '4609999999999', name: 'Ка', sku: 'VVG-3' }), /полное наименование/);
+  await assert.rejects(K.createItemFromScan({ barcode: '4600000000011', name: 'Дубль лопаты', sku: 'X1' }), /уже есть/);
+  const id = await K.createItemFromScan({ barcode: '4609999999999', name: 'Кабель ВВГ 3×2,5 мм², бухта 100 м', sku: 'VVG-3' });
+  const item = (await K.getItem(id))!;
+  assert.deepEqual([item.barcode, item.sku, item.name], ['4609999999999', 'VVG-3', 'Кабель ВВГ 3×2,5 мм², бухта 100 м']);
+  const doc = await K.createDocument('receipt', 'fact', { warehouseId: whId });
+  await K.addLineByCode(doc, '4609999999999', 5);
+  assert.equal((await K.listLines(doc))[0].sku, 'VVG-3');
+  // правка номенклатуры — по-прежнему только руководитель и администратор
+  await assert.rejects(K.saveItem({ id, sku: 'VVG-3', name: 'x' }), /номенклатура/);
+  // цена сохраняется, если её не передали
+  await as('boss').saveItem({ id, sku: 'VVG-3', name: 'Кабель ВВГ', price: 150 });
+  await as('boss').saveItem({ id, sku: 'VVG-3', name: 'Кабель ВВГ 3×2,5' });
+  assert.equal((await K.getItem(id))!.price, 150);
 });

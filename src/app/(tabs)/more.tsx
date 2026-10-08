@@ -53,6 +53,7 @@ export default function MoreScreen() {
           <View style={{ borderRadius: 12, overflow: 'hidden' }}>
             {p.administer ? link('Настройки', `Выдача ТМЦ: ${settings.custodyEnabled ? 'включена' : 'выключена'}`, '/settings') : null}
             {mode === 'server' ? link('Подключение терминалов', 'QR-код и адрес сервера для ТСД и телефонов', '/devices') : null}
+            {p.develop ? link('Разработчик', 'База данных, резервные копии (только администратор)', '/dev') : null}
           </View>
         </Section>
       ) : null}

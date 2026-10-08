@@ -291,6 +291,14 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_contracts_party ON contracts(counterparty_id);
   `,
+  // v9: задания — статус (open — в работе, done — выполнено), кто и когда выполнил
+  `
+  ALTER TABLE documents ADD COLUMN task_status TEXT;
+  ALTER TABLE documents ADD COLUMN completed_by INTEGER REFERENCES users(id);
+  ALTER TABLE documents ADD COLUMN completed_at TEXT;
+  UPDATE documents SET task_status = CASE WHEN status = 'draft' THEN 'open' ELSE 'done' END
+    WHERE EXISTS (SELECT 1 FROM doc_plan p WHERE p.doc_id = documents.id);
+  `,
 ];
 
 export async function migrate(db: DB): Promise<void> {

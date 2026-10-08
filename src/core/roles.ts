@@ -38,8 +38,10 @@ export const rank = (r: Role) => ROLE_RANK[r] ?? 0;
 
 /** Права. Одно место, где описано, кто что может. */
 export const can = {
-  /** Настройки системы, отделы, смена ролей. */
-  administer: (r: Role) => r === 'admin',
+  /** Настройки, отделы, удаление складов — руководитель и администратор («полные права»). */
+  administer: (r: Role) => rank(r) >= ROLE_RANK.manager,
+  /** Разработка: сведения о базе, резервные копии, служебные операции — только администратор. */
+  develop: (r: Role) => r === 'admin',
   /** Высылать ссылки-приглашения. */
   invite: (r: Role) => rank(r) >= ROLE_RANK.manager,
   /** Пригласить пользователя с ролью target. */
@@ -49,8 +51,10 @@ export const can = {
   operate: (r: Role) => rank(r) >= ROLE_RANK.storekeeper,
   /** Номенклатура (справочник товаров и групп): видеть вкладку, заводить и править товары. */
   manageItems: (r: Role) => rank(r) >= ROLE_RANK.manager,
-  /** Видеть остатки склада. */
-  viewStock: (r: Role) => rank(r) >= ROLE_RANK.employee,
+  /** Видеть остатки склада (запросы) — все: разнорабочему нужно знать, где взять товар по заданию. */
+  viewStock: (r: Role) => rank(r) >= ROLE_RANK.worker,
+  /** Вкладка «Остатки» и история — сотрудник и выше. */
+  stockTab: (r: Role) => rank(r) >= ROLE_RANK.employee,
   /** Брать ТМЦ со склада на себя (выдача себе). */
   takeForSelf: (r: Role) => rank(r) >= ROLE_RANK.employee,
   /** Выдать ТМЦ пользователю с ролью target (себе — всегда, если можно брать). */

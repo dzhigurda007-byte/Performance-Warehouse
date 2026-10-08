@@ -30,7 +30,7 @@ export type Resolved =
 
 export const history = {
   moves(ctx: Ctx, f: HistoryFilter = {}) {
-    need(ctx, can.viewStock, 'просмотр истории');
+    need(ctx, can.stockTab, 'просмотр истории');
     const where: string[] = [];
     const args: (string | number)[] = [];
     if (!can.operate(ctx.user.role)) { where.push('(m.user_id = ? OR m.holder_id = ?)'); args.push(ctx.user.id, ctx.user.id); }

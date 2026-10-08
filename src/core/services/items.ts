@@ -74,7 +74,7 @@ async function upsertItem(db: DB, row: ImportRow): Promise<'created' | 'updated'
   return 'created';
 }
 
-export const items = {
+const itemsHead = {
   async list(ctx: Ctx, search = '', groupId?: number | null) {
     const q = `%${search.trim()}%`;
     const groups = groupId ? await groupWithChildren(ctx.db, groupId) : [];
@@ -92,35 +92,58 @@ export const items = {
 
   async save(ctx: Ctx, it: Partial<Item> & { sku: string; name: string }) {
     need(ctx, can.manageItems, 'номенклатура (только руководитель и администратор)');
-    const sku = it.sku.trim();
-    const name = it.name.trim();
-    if (!sku || !name) throw new BusinessError('Укажите артикул и наименование');
-    if (/\s/.test(sku)) throw new BusinessError('Артикул не должен содержать пробелов');
-    const barcode = emptyToNull(it.barcode);
-    if (barcode) {
-      const dup = await ctx.db.getFirstAsync<{ id: number }>(
-        'SELECT id FROM items WHERE barcode = ? AND id <> ?', barcode, it.id ?? 0);
-      if (dup) throw new BusinessError('Этот штрихкод уже назначен другому товару');
-    }
-    const unit = emptyToNull(it.unit) ?? 'шт';
-    const price = it.price === undefined || it.price === null || (it.price as unknown) === '' ? null : Number(it.price);
-    if (price !== null && !(Number.isFinite(price) && price >= 0)) throw new BusinessError('Цена — неотрицательное число');
-    const args = [sku, name, unit, barcode, emptyToNull(it.description), it.group_id ?? null, it.track_units ? 1 : 0, fold(`${name} ${sku}`),
-      price === null ? null : Math.round(price * 100) / 100];
-    try {
-      if (it.id) {
-        await ctx.db.runAsync(`UPDATE items SET sku = ?, name = ?, unit = ?, barcode = ?, description = ?, group_id = ?,
-          track_units = ?, search_name = ?, price = ? WHERE id = ?`, ...args, it.id);
-        return it.id;
-      }
-      const r = await ctx.db.runAsync(`INSERT INTO items(sku, name, unit, barcode, description, group_id, track_units, search_name, price)
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, ...args);
-      return r.lastInsertRowId;
-    } catch (e) {
-      if (String(e).includes('UNIQUE')) throw new BusinessError('Товар с таким артикулом уже существует');
-      throw e;
-    }
+    return writeItem(ctx, it);
   },
+
+  /**
+   * Приёмка: отсканирован ШК, которого нет в базе — кладовщик (и выше) заводит товар на месте.
+   * ШК подставляет система (его не меняют), обязательны полное наименование и артикул.
+   */
+  async createFromScan(ctx: Ctx, it: { barcode: string; name: string; sku: string; unit?: string; group_id?: number | null }) {
+    need(ctx, can.operate, 'заведение товара при приёмке (кладовщик и выше)');
+    const barcode = (it.barcode ?? '').trim();
+    if (!barcode) throw new BusinessError('Нет штрихкода');
+    if (await findItemByCode(ctx.db, barcode)) throw new BusinessError(`Штрихкод ${barcode} уже есть в номенклатуре`);
+    if ((it.name ?? '').trim().length < 3) throw new BusinessError('Укажите полное наименование товара');
+    return writeItem(ctx, { barcode, name: it.name, sku: it.sku, unit: it.unit, group_id: it.group_id ?? null });
+  },
+};
+
+/** Записать товар (проверки артикула и ШК); права проверяет вызывающий. */
+async function writeItem(ctx: Ctx, it: Partial<Item> & { sku: string; name: string }) {
+  const sku = it.sku.trim();
+  const name = it.name.trim();
+  if (!sku || !name) throw new BusinessError('Укажите артикул и наименование');
+  if (/\s/.test(sku)) throw new BusinessError('Артикул не должен содержать пробелов');
+  const barcode = emptyToNull(it.barcode);
+  if (barcode) {
+    const dup = await ctx.db.getFirstAsync<{ id: number }>(
+      'SELECT id FROM items WHERE barcode = ? AND id <> ?', barcode, it.id ?? 0);
+    if (dup) throw new BusinessError('Этот штрихкод уже назначен другому товару');
+  }
+  const unit = emptyToNull(it.unit) ?? 'шт';
+  const price = it.price === undefined || it.price === null || (it.price as unknown) === '' ? null : Number(it.price);
+  if (price !== null && !(Number.isFinite(price) && price >= 0)) throw new BusinessError('Цена — неотрицательное число');
+  const priceValue = price === null ? null : Math.round(price * 100) / 100;
+  // цену не передали (импорт, правка из других экранов) — сохраняется прежняя
+  const keepPrice = it.price === undefined ? 1 : 0;
+  const args = [sku, name, unit, barcode, emptyToNull(it.description), it.group_id ?? null, it.track_units ? 1 : 0, fold(`${name} ${sku}`)];
+  try {
+    if (it.id) {
+      await ctx.db.runAsync(`UPDATE items SET sku = ?, name = ?, unit = ?, barcode = ?, description = ?, group_id = ?,
+        track_units = ?, search_name = ?, price = CASE WHEN ? = 1 THEN price ELSE ? END WHERE id = ?`, ...args, keepPrice, priceValue, it.id);
+      return it.id;
+    }
+    const r = await ctx.db.runAsync(`INSERT INTO items(sku, name, unit, barcode, description, group_id, track_units, search_name, price)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, ...args, priceValue);
+    return r.lastInsertRowId;
+  } catch (e) {
+    if (String(e).includes('UNIQUE')) throw new BusinessError('Товар с таким артикулом уже существует');
+    throw e;
+  }
+}
+
+const itemsRest = {
 
   /**
    * Удалить товар из номенклатуры (руководитель, администратор).
@@ -228,3 +251,5 @@ export const items = {
   /** Используется приходом из Excel. */
   upsertForReceipt: upsertItem,
 };
+
+export const items = { ...itemsHead, ...itemsRest };

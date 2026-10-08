@@ -17,4 +17,5 @@ export const DOC_SOURCE_LABEL: Record<string, string> = {
   scan: 'по сканированию',
   excel: 'из Excel',
   return: 'возврат',
+  task: 'по заданию',
 };
