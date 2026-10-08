@@ -24,7 +24,7 @@ interface BackendState {
   resetConnection(): Promise<void>;
   login(login: string, password: string): Promise<void>;
   /** Первый администратор (сервер) / регистрация (автономный режим). */
-  register(login: string, fullName: string, password: string): Promise<void>;
+  register(login: string, fullName: string, password: string, setupCode?: string): Promise<void>;
   joinInvite(server: string, token: string, login: string, fullName: string, password: string): Promise<void>;
   logout(): Promise<void>;
   refreshSettings(): Promise<void>;
@@ -177,8 +177,8 @@ export function BackendProvider({ children }: { children: ReactNode }) {
       }
     },
 
-    async register(login, fullName, password) {
-      if (mode === 'server' && serverUrl) await applyAuth(serverUrl, await remoteAuth.setup(serverUrl, { login, fullName, password }));
+    async register(login, fullName, password, setupCode) {
+      if (mode === 'server' && serverUrl) await applyAuth(serverUrl, await remoteAuth.setup(serverUrl, { login, fullName, password, setupCode }));
       else {
         const u = await localAuth.register(await getLocalDb(), login, fullName, password);
         await kv.set(K.localUser, String(u.id));

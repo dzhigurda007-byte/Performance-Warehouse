@@ -96,7 +96,11 @@ export const auth = {
     return token;
   },
 
-  async userBySession(db: DB, token: string): Promise<SessionUser | null> {
+  /** maxIdleDays — сеанс, которым не пользовались дольше, закрывается (онлайн-сервер). */
+  async userBySession(db: DB, token: string, maxIdleDays?: number): Promise<SessionUser | null> {
+    if (maxIdleDays) {
+      await db.runAsync(`DELETE FROM sessions WHERE token = ? AND last_seen_at < datetime('now','localtime', ?)`, token, `-${maxIdleDays} days`);
+    }
     const u = await db.getFirstAsync<SessionUser>(`
       SELECT u.id, u.login, u.full_name, u.role, u.department_id, u.supervisor_id
       FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND u.active = 1`, token);
@@ -207,7 +211,7 @@ export const users = {
   async createInvite(ctx: Ctx, p: { role: Role; department_id?: number | null; supervisor_id?: number | null; days?: number; maxUses?: number }) {
     need(ctx, can.invite, 'отправку приглашений');
     if (!isRole(p.role) || !can.inviteRole(ctx.user.role, p.role)) deny(`приглашение с ролью «${ROLE_LABEL[p.role]}»`);
-    const token = randomToken(12);
+    const token = randomToken(24);
     const days = Math.min(Math.max(p.days ?? 7, 1), 365);
     const r = await ctx.db.runAsync(`INSERT INTO invites(token, role, department_id, supervisor_id, created_by, expires_at, max_uses)
       VALUES(?, ?, ?, ?, ?, datetime('now','localtime', ?), ?)`,

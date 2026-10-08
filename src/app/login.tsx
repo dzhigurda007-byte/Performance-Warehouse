@@ -11,6 +11,9 @@ import { remoteAuth } from '../lib/remote';
 export default function LoginScreen() {
   const { mode, serverUrl, login, register, resetConnection } = useBackend();
   const [needsSetup, setNeedsSetup] = useState(false);
+  const [codeRequired, setCodeRequired] = useState(false);
+  const [online, setOnline] = useState(false);
+  const [setupCode, setSetupCode] = useState('');
   const [orgName, setOrgName] = useState('');
   const [signUp, setSignUp] = useState(false);
   const [form, setForm] = useState({ login: '', name: '', pass: '', pass2: '' });
@@ -21,6 +24,8 @@ export default function LoginScreen() {
     if (mode !== 'server' || !serverUrl) return;
     remoteAuth.ping(serverUrl).then((p) => {
       setNeedsSetup(p.needsSetup);
+      setCodeRequired(!!p.setupCodeRequired);
+      setOnline(!!p.online);
       setOrgName(p.orgName);
     }).catch(showError);
   }, [mode, serverUrl]);
@@ -31,7 +36,7 @@ export default function LoginScreen() {
     if (creating && form.pass !== form.pass2) return showError(new Error('Пароли не совпадают'));
     setBusy(true);
     try {
-      if (creating) await register(form.login, form.name, form.pass);
+      if (creating) await register(form.login, form.name, form.pass, codeRequired ? setupCode.trim() : undefined);
       else await login(form.login, form.pass);
     } catch (e) {
       showError(e);
@@ -48,7 +53,7 @@ export default function LoginScreen() {
           <View style={{ alignItems: 'center', marginBottom: 20 }}>
             <Text style={{ fontSize: 44 }}>📦</Text>
             <H1>{orgName || 'Performance Warehouse'}</H1>
-            <Muted>{mode === 'server' ? `Сервер склада: ${serverUrl}` : 'Автономный режим (база на телефоне)'}</Muted>
+            <Muted>{mode === 'server' ? `${online ? 'Онлайн-сервер' : 'Сервер склада'}: ${serverUrl}` : 'Автономный режим (база на телефоне)'}</Muted>
           </View>
           <Card>
             <Text style={{ fontSize: 18, fontWeight: '700', marginBottom: 4, color: colors.text }}>
@@ -56,6 +61,14 @@ export default function LoginScreen() {
             </Text>
             {mode === 'server' && needsSetup ? (
               <Muted>Сервер новый. Создайте учётную запись администратора — он настроит склад и пригласит сотрудников.</Muted>
+            ) : null}
+            {mode === 'server' && needsSetup && codeRequired ? (
+              <>
+                <View style={{ height: 8 }} />
+                <Field label="Код установки" value={setupCode} onChangeText={setSetupCode} autoCapitalize="characters" autoCorrect={false}
+                  placeholder="10 символов из окна / журнала сервера" />
+                <Muted>Онлайн-сервер: код показан при запуске сервера и лежит в файле data/setup-code.txt. Без него администратора не создать.</Muted>
+              </>
             ) : null}
             <View style={{ height: 8 }} />
             <Field label="Логин" value={form.login} onChangeText={(v) => setForm({ ...form, login: v })} autoCapitalize="none" autoCorrect={false} />
@@ -69,7 +82,7 @@ export default function LoginScreen() {
           {mode === 'server' && !needsSetup ? (
             <Card>
               <Text style={{ fontWeight: '700', color: colors.text }}>Нет аккаунта?</Text>
-              <Muted>Новые сотрудники входят по приглашению от руководителя: откройте ссылку или отсканируйте её QR-код.</Muted>
+              <Muted>{online ? 'Регистрации нет: доступ только по приглашению. ' : ''}Новые сотрудники входят по приглашению от руководителя: откройте ссылку или отсканируйте её QR-код.</Muted>
               {Platform.OS !== 'web' ? <Button title="Сканировать приглашение" variant="secondary" icon="⌗" onPress={() => setScan(true)} /> : null}
             </Card>
           ) : null}

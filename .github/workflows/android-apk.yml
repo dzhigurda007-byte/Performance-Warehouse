@@ -84,10 +84,26 @@ jobs:
           cp windows/*.cmd windows/README.txt $PKG/
           zip -qr PerformanceWarehouse-Server-Windows.zip $PKG
           ls -la PerformanceWarehouse-Server-Windows.zip
+      - name: Assemble online server package (Docker + Caddy HTTPS)
+        run: |
+          set -e
+          ONL=PerformanceWarehouse-Online
+          mkdir -p $ONL/app/web/download
+          cp online/Dockerfile online/docker-compose.yml online/Caddyfile online/.env.example online/README-online.txt $ONL/
+          cp server/dist/pw-server.cjs $ONL/app/
+          cp -r dist-web/. $ONL/app/web/
+          cp apk/PerformanceWarehouse.apk $ONL/app/web/download/
+          zip -qr PerformanceWarehouse-Online.zip $ONL
+          ls -la PerformanceWarehouse-Online.zip
       - uses: actions/upload-artifact@v4
         with:
           name: windows
           path: PerformanceWarehouse-Server-Windows.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: online
+          path: PerformanceWarehouse-Online.zip
           if-no-files-found: error
 
   installer:
@@ -139,7 +155,10 @@ jobs:
             * **PerformanceWarehouse.apk** — приложение для Android (телефоны и ТСД).
             * **PerformanceWarehouse-Server-Windows.zip** — тот же сервер без установки (портативная версия):
               распакуйте, запустите `start.cmd`. Инструкция — `README.txt` внутри архива.
+            * **PerformanceWarehouse-Online.zip** — онлайн-сервер для VPS в интернете (Docker + автоматический HTTPS),
+              вход только по приглашениям. Инструкция — `README-online.txt` внутри архива.
           files: |
             out/PerformanceWarehouse-Setup.exe
             out/PerformanceWarehouse.apk
             out/PerformanceWarehouse-Server-Windows.zip
+            out/PerformanceWarehouse-Online.zip

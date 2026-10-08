@@ -47,3 +47,14 @@ test('подбор учитывает уже зарезервированное 
   assert.deepEqual(r.picks, [{ cell_id: 3, box_id: null, qty: 1 }]);
   assert.equal(r.shortage, 4);
 });
+
+test('адрес сервера: локальная сеть — http и порт 8080, домен — https', async () => {
+  const { normalizeServerUrl } = await import('../src/lib/remote');
+  assert.equal(normalizeServerUrl('192.168.1.10'), 'http://192.168.1.10:8080');
+  assert.equal(normalizeServerUrl('192.168.1.10:9000'), 'http://192.168.1.10:9000');
+  assert.equal(normalizeServerUrl('localhost'), 'http://localhost:8080');
+  assert.equal(normalizeServerUrl('sklad.example.ru'), 'https://sklad.example.ru');
+  assert.equal(normalizeServerUrl('https://sklad.example.ru/'), 'https://sklad.example.ru');
+  assert.equal(normalizeServerUrl('http://sklad.example.ru:8080'), 'http://sklad.example.ru:8080');
+  assert.equal(normalizeServerUrl('sklad.example.ru:8443'), 'https://sklad.example.ru:8443');
+});

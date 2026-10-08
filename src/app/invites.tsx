@@ -17,11 +17,11 @@ export default function InvitesScreen() {
   const [data, reload] = useFocusLoad(async () => {
     const [invites, deps, users] = await Promise.all([api.listInvites(), api.listDepartments(), api.listUsers()]);
     let base = serverUrl ?? '';
-    // В браузере на ПК адрес может быть localhost — для ссылки берём адрес в сети Wi-Fi.
-    if (serverUrl && token && /localhost|127\.0\.0\.1/.test(serverUrl)) {
-      const info = await remoteAuth.info(serverUrl, token).catch(() => null);
-      if (info?.urls[0]) base = info.urls[0];
-    }
+    const info = serverUrl && token ? await remoteAuth.info(serverUrl, token).catch(() => null) : null;
+    // Онлайн-сервер: ссылки всегда на адрес в интернете.
+    // Сервер на ПК: в браузере адрес может быть localhost — для ссылки берём адрес в сети Wi-Fi.
+    if (info?.publicUrl) base = info.publicUrl;
+    else if (serverUrl && /localhost|127\.0\.0\.1/.test(serverUrl) && info?.urls[0]) base = info.urls[0];
     return { invites, deps, users, base };
   }, [api, serverUrl, token]);
   const roles = ROLES.filter((r) => can.inviteRole(p.role, r));

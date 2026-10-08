@@ -1,0 +1,33 @@
+# Онлайн-сервер склада: приложение + Caddy (автоматический HTTPS-сертификат Let's Encrypt).
+# Настройка — в файле .env (скопируйте из .env.example). Запуск: docker compose up -d --build
+services:
+  warehouse:
+    build: .
+    restart: unless-stopped
+    environment:
+      PW_PUBLIC_URL: https://${DOMAIN}
+      PW_SETUP_CODE: ${SETUP_CODE:-}
+    volumes:
+      - ./data:/data
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - warehouse
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+      EMAIL: ${EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -8,6 +8,9 @@ export interface Ping {
   version: string;
   orgName: string;
   needsSetup: boolean;
+  /** Онлайн-сервер: первый администратор создаётся только с кодом установки. */
+  setupCodeRequired?: boolean;
+  online?: boolean;
 }
 
 export interface InviteInfo {
@@ -27,6 +30,9 @@ export interface ServerInfo {
   /** Найденные проблемы сети (например, VPN перехватывает локальную сеть). */
   problems: string[];
   dataDir: string;
+  /** Онлайн-сервер в интернете и его адрес. */
+  online?: boolean;
+  publicUrl?: string | null;
 }
 
 export interface AuthResult {
@@ -34,11 +40,21 @@ export interface AuthResult {
   user: SessionUser;
 }
 
+/**
+ * Адрес сервера из того, что ввёл пользователь:
+ *  «192.168.1.10» / «localhost» → http://…:8080 (сервер склада в локальной сети);
+ *  «sklad.example.ru» → https://sklad.example.ru (онлайн-сервер в интернете, порт 443);
+ *  явно указанные схема и порт сохраняются.
+ */
 export function normalizeServerUrl(input: string): string {
   let s = input.trim().replace(/\/+$/, '');
   if (!s) return s;
-  if (!/^https?:\/\//i.test(s)) s = `http://${s}`;
-  if (!/:\d+$/.test(s.replace(/^https?:\/\//i, '').split('/')[0])) s = `${s}:8080`;
+  const hasScheme = /^https?:\/\//i.test(s);
+  const host = s.replace(/^https?:\/\//i, '').split('/')[0];
+  const hostname = host.replace(/:\d+$/, '');
+  const local = /^(localhost|\d{1,3}(\.\d{1,3}){3})$/i.test(hostname) || hostname.endsWith('.local');
+  if (!hasScheme) s = `${local ? 'http' : 'https'}://${s}`;
+  if (local && /^http:/i.test(s) && !/:\d+$/.test(host)) s = s.replace(host, `${host}:8080`);
   return s;
 }
 
@@ -54,7 +70,9 @@ async function request<T>(url: string, body: unknown, token?: string | null, tim
       signal: ctrl.signal,
     });
   } catch {
-    throw new BusinessError('Нет связи с сервером склада. Проверьте: телефон в Wi-Fi склада, сервер на ПК запущен, брандмауэр открыт, VPN на ПК не перехватывает локальную сеть (на ПК: «Ещё» → «Подключение терминалов»).', 'network');
+    throw new BusinessError(/^https:/i.test(url)
+      ? 'Нет связи с онлайн-сервером склада. Проверьте интернет на устройстве и адрес сервера.'
+      : 'Нет связи с сервером склада. Проверьте: телефон в Wi-Fi склада, сервер на ПК запущен, брандмауэр открыт, VPN на ПК не перехватывает локальную сеть (на ПК: «Ещё» → «Подключение терминалов»).', 'network');
   } finally {
     clearTimeout(timer);
   }
@@ -70,7 +88,7 @@ async function request<T>(url: string, body: unknown, token?: string | null, tim
 
 export const remoteAuth = {
   ping: (server: string, timeoutMs?: number) => request<Ping>(`${server}/api/ping`, undefined, null, timeoutMs),
-  setup: (server: string, p: { login: string; fullName: string; password: string }) =>
+  setup: (server: string, p: { login: string; fullName: string; password: string; setupCode?: string }) =>
     request<AuthResult>(`${server}/api/auth/setup`, p),
   login: (server: string, login: string, password: string) =>
     request<AuthResult>(`${server}/api/auth/login`, { login, password }),

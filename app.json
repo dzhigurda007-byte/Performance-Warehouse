@@ -2,7 +2,7 @@
   "expo": {
     "name": "Performance Warehouse",
     "slug": "performance-warehouse",
-    "version": "3.0.0",
+    "version": "3.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -22,7 +22,7 @@
       "permissions": [
         "android.permission.CAMERA"
       ],
-      "versionCode": 13
+      "versionCode": 14
     },
     "web": {
       "favicon": "./assets/favicon.png",

@@ -28,6 +28,34 @@ export default function DevicesScreen() {
     }
   }
 
+  // Онлайн-сервер: один адрес в интернете, проверка локальной сети не нужна
+  if (info.online) {
+    const url = info.publicUrl || serverUrl || '';
+    return (
+      <ScrollView style={s.screen} contentContainerStyle={s.content}>
+        <Card style={{ backgroundColor: colors.successSoft }}>
+          <Text style={{ color: colors.success, fontWeight: '700', fontSize: 16 }}>Онлайн-сервер — доступ через интернет</Text>
+          <Muted>Подключиться можно из любого места. Войти — только по приглашению; права — по роли из приглашения.</Muted>
+        </Card>
+        <Card style={{ alignItems: 'center' }}>
+          <Text style={{ fontSize: 18, fontWeight: '700', color: colors.text }}>{url}</Text>
+          <QrView value={serverQr(url)} caption="QR адреса сервера — сканировать в приложении на телефоне / ТСД" size={200} />
+          {info.publicUrl ? null : <Muted>Адрес в интернете не задан на сервере (PW_PUBLIC_URL) — показан адрес, по которому вы подключены.</Muted>}
+        </Card>
+        <Muted>
+          На телефоне: установите приложение → «Сервер склада» → отсканируйте этот QR или введите адрес сервера (без https://).
+          Затем откройте ссылку-приглашение или отсканируйте её QR: «Ещё → Приглашения».
+        </Muted>
+        <Card>
+          <Text style={{ fontWeight: '600', color: colors.text }}>Приложение для Android</Text>
+          <Muted>{url}/download/PerformanceWarehouse.apk</Muted>
+          <QrView value={`${url}/download/PerformanceWarehouse.apk`} caption="QR — скачать APK" size={140} />
+        </Card>
+        <Muted>Версия сервера: {info.version}</Muted>
+      </ScrollView>
+    );
+  }
+
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.content}>
       {info.problems?.length ? (
