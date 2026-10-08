@@ -1,0 +1,4 @@
+# Файлы сервера склада не должны открываться из браузера напрямую — только через приложение Node.js.
+<FilesMatch "\.(db|db-wal|db-shm|json|cjs|txt)$">
+  Require all denied
+</FilesMatch>

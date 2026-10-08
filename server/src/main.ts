@@ -179,7 +179,8 @@ function manualBackup(raw: DatabaseSync, dir: string) {
 // ---------------------------------------------------------------- сервер
 
 export interface ServerOptions {
-  port: number;
+  /** Номер порта или путь к Unix-сокету (так иногда задаёт панель хостинга). */
+  port: number | string;
   dataDir: string;
   webDir: string | null;
   quiet?: boolean;
@@ -238,7 +239,7 @@ export async function startServer(opts: ServerOptions) {
   let netWarned = '';
   const doNetCheck = async () => {
     try {
-      net = await checkNetwork(opts.port);
+      net = await checkNetwork(Number(opts.port) || 8080);
       const key = net.problems.join('|');
       if (key && key !== netWarned && !opts.quiet) {
         console.log('');
@@ -356,7 +357,7 @@ export async function startServer(opts: ServerOptions) {
         return send(res, 200, { ok: true });
       case '/api/server/info': {
         if (body.recheck) await doNetCheck();
-        const lan = net?.addresses.filter((a) => a.kind === 'lan').map((a) => a.url) ?? lanAddresses(opts.port);
+        const lan = net?.addresses.filter((a) => a.kind === 'lan').map((a) => a.url) ?? lanAddresses(Number(opts.port) || 8080);
         return send(res, 200, {
           version: VERSION,
           urls: lan,
@@ -461,7 +462,13 @@ export async function startServer(opts: ServerOptions) {
     ? createHttpsServer({ cert: readFileSync(opts.tls.cert), key: readFileSync(opts.tls.key) }, handler)
     : createServer(handler);
 
-  await new Promise<void>((ok) => server.listen(opts.port, opts.host ?? '0.0.0.0', ok));
+  const socket = typeof opts.port === 'string' && !/^\d+$/.test(opts.port) ? opts.port : null;
+  if (socket) {
+    rmSync(socket, { force: true }); // сокет от прошлого запуска
+    await new Promise<void>((ok) => server.listen(socket, ok));
+  } else {
+    await new Promise<void>((ok) => server.listen(Number(opts.port), opts.host ?? '0.0.0.0', ok));
+  }
   return {
     server,
     db,
@@ -472,8 +479,14 @@ export async function startServer(opts: ServerOptions) {
 
 // ---------------------------------------------------------------- запуск из командной строки
 
-if (require.main === module) {
-  const port = Number(arg('port', '8080'));
+/**
+ * Запуск сервера с параметрами из командной строки и переменных окружения.
+ * Вызывается напрямую (node pw-server.cjs …) или из app.js на хостинге (ISPmanager, Passenger).
+ */
+export function runCli() {
+  // порт: --port / PW_PORT, иначе PORT от панели хостинга, иначе 8080; может быть путём к сокету
+  const portArg = arg('port', process.env.PORT ?? '8080');
+  const port: number | string = /^\d+$/.test(portArg) ? Number(portArg) : portArg;
   const baseDir = process.env.PW_HOME ?? process.cwd();
   const dataDir = resolve(baseDir, arg('data', 'data'));
   const webArg = arg('web', 'web');
@@ -495,7 +508,7 @@ if (require.main === module) {
       if (online) {
         console.log('  РЕЖИМ: онлайн-сервер (доступ из интернета только по приглашениям)');
         console.log(`  Адрес в интернете:        ${publicUrl ?? '(не задан — укажите --public-url / PW_PUBLIC_URL)'}`);
-        console.log(`  Слушает:                  ${tls ? 'https' : 'http'}://${arg('host', '0.0.0.0')}:${port}`);
+        console.log(`  Слушает:                  ${typeof port === 'string' ? `сокет ${port}` : `${tls ? 'https' : 'http'}://${arg('host', '0.0.0.0')}:${port}`}`);
         if (!tls && !/^https:/i.test(publicUrl ?? '')) {
           console.log('  ВНИМАНИЕ: нет HTTPS. В интернете пароли и данные нужно защищать — поставьте сервер за Caddy/nginx');
           console.log('            с сертификатом или укажите --tls-cert и --tls-key.');
@@ -508,9 +521,9 @@ if (require.main === module) {
           console.log(`  Код также записан в ${join(dataDir, 'setup-code.txt')} и удалится после создания администратора.`);
         }
       } else {
-        const net = await checkNetwork(port).catch(() => null);
+        const net = await checkNetwork(Number(port) || 8080).catch(() => null);
         console.log('  Рабочее место на этом ПК:  http://localhost:' + port);
-        for (const a of net?.addresses ?? lanAddresses(port).map((url) => ({ url, kind: 'lan', iface: '' }))) {
+        for (const a of net?.addresses ?? lanAddresses(Number(port) || 8080).map((url) => ({ url, kind: 'lan', iface: '' }))) {
           if (a.kind === 'lan') console.log(`  Для терминалов по Wi-Fi:   ${a.url}${a.iface ? `  (${a.iface})` : ''}`);
           else console.log(`  VPN, не для терминалов:    ${a.url}  (${a.iface})`);
         }
@@ -524,3 +537,5 @@ if (require.main === module) {
       process.exit(1);
     });
 }
+
+if (require.main === module) runCli();

@@ -1,0 +1,9 @@
+{
+  "publicUrl": "https://sklad.example.ru",
+  "dataDir": "../pw-data",
+  "port": 3000,
+  "host": "127.0.0.1",
+  "online": true,
+  "behindProxy": true,
+  "setupCode": ""
+}

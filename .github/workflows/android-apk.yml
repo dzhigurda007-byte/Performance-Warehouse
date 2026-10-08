@@ -95,6 +95,15 @@ jobs:
           cp apk/PerformanceWarehouse.apk $ONL/app/web/download/
           zip -qr PerformanceWarehouse-Online.zip $ONL
           ls -la PerformanceWarehouse-Online.zip
+          # хостинг с ISPmanager / Node.js без Docker: файлы прямо в корне архива
+          HST=hosting-pkg
+          mkdir -p $HST/web/download
+          cp hosting/app.js hosting/pw-config.json hosting/.htaccess hosting/README-hosting.txt $HST/
+          cp server/dist/pw-server.cjs $HST/
+          cp -r dist-web/. $HST/web/
+          cp apk/PerformanceWarehouse.apk $HST/web/download/
+          (cd $HST && zip -qr ../PerformanceWarehouse-Hosting.zip .)
+          ls -la PerformanceWarehouse-Hosting.zip
       - uses: actions/upload-artifact@v4
         with:
           name: windows
@@ -103,7 +112,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: online
-          path: PerformanceWarehouse-Online.zip
+          path: |
+            PerformanceWarehouse-Online.zip
+            PerformanceWarehouse-Hosting.zip
           if-no-files-found: error
 
   installer:
@@ -157,8 +168,12 @@ jobs:
               распакуйте, запустите `start.cmd`. Инструкция — `README.txt` внутри архива.
             * **PerformanceWarehouse-Online.zip** — онлайн-сервер для VPS в интернете (Docker + автоматический HTTPS),
               вход только по приглашениям. Инструкция — `README-online.txt` внутри архива.
+            * **PerformanceWarehouse-Hosting.zip** — тот же онлайн-сервер для хостинга с панелью ISPmanager (reg.ru и др.)
+              без Docker: загрузить через менеджер файлов, запустить `app.js` как приложение Node.js 22.
+              Инструкция — `README-hosting.txt` внутри архива.
           files: |
             out/PerformanceWarehouse-Setup.exe
             out/PerformanceWarehouse.apk
             out/PerformanceWarehouse-Server-Windows.zip
             out/PerformanceWarehouse-Online.zip
+            out/PerformanceWarehouse-Hosting.zip
