@@ -51,6 +51,37 @@ jobs:
           path: android/app/build/outputs/apk/release/PerformanceWarehouse.apk
           if-no-files-found: error
 
+  apk-lite:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # отдельное приложение PerformanceWarehouseLite: свой пакет, экраны из src/lite/app
+      APP_VARIANT: lite
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
+      - name: Generate native Android project (Lite)
+        run: npx expo prebuild --platform android --no-install
+      - name: Build release APK (Lite)
+        working-directory: android
+        run: |
+          ./gradlew assembleRelease --no-daemon --max-workers=2 -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8" -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/PerformanceWarehouseLite.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-lite
+          path: android/app/build/outputs/apk/release/PerformanceWarehouseLite.apk
+          if-no-files-found: error
+
   windows:
     needs: apk
     runs-on: ubuntu-latest
@@ -145,7 +176,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [apk, windows, installer]
+    needs: [apk, apk-lite, windows, installer]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -164,6 +195,9 @@ jobs:
 
             * **PerformanceWarehouse-Setup.exe** — установщик сервера склада для Windows (рекомендуется).
             * **PerformanceWarehouse.apk** — приложение для Android (телефоны и ТСД).
+            * **PerformanceWarehouseLite.apk** — упрощённое приложение для одного телефона без сервера и регистрации:
+              номенклатура (артикул, наименование, SPP), приходные и расходные ордера со сканером, PDF «Поделиться»,
+              история движений, резервная копия базы для переноса на другой телефон.
             * **PerformanceWarehouse-Server-Windows.zip** — тот же сервер без установки (портативная версия):
               распакуйте, запустите `start.cmd`. Инструкция — `README.txt` внутри архива.
             * **PerformanceWarehouse-Online.zip** — онлайн-сервер для VPS в интернете (Docker + автоматический HTTPS),
@@ -174,6 +208,7 @@ jobs:
           files: |
             out/PerformanceWarehouse-Setup.exe
             out/PerformanceWarehouse.apk
+            out/PerformanceWarehouseLite.apk
             out/PerformanceWarehouse-Server-Windows.zip
             out/PerformanceWarehouse-Online.zip
             out/PerformanceWarehouse-Hosting.zip
