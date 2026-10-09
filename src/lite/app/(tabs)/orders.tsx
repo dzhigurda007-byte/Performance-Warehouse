@@ -43,6 +43,7 @@ export default function OrdersTab() {
               <Button title="Приход" icon="↓" variant="success" style={{ flex: 1 }} onPress={() => create('receipt')} />
               <Button title="Расход" icon="↑" variant="danger" style={{ flex: 1 }} onPress={() => create('issue')} />
             </View>
+            <Button title="Перемещение между ячейками" icon="⇄" variant="secondary" onPress={() => router.push('/move')} />
             <SearchBox value={q} onChangeText={setQ} placeholder="Номер, поставщик / получатель" />
             <Chips value={type} onChange={setType} options={[
               { value: 'all' as TypeF, label: 'Все' },

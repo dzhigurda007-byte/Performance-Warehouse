@@ -8,7 +8,7 @@ import { LITE_SCHEMA_VERSION, ensureMainCell } from './schema';
 export const BACKUP_FORMAT = 'PerformanceWarehouseLite';
 
 /** Порядок важен: сначала справочники, потом то, что на них ссылается. */
-const TABLES = ['meta', 'items', 'cells', 'stock', 'orders', 'order_lines', 'moves'] as const;
+const TABLES = ['meta', 'item_groups', 'items', 'racks', 'cells', 'stock', 'orders', 'order_lines', 'moves'] as const;
 type Table = (typeof TABLES)[number];
 
 export interface Backup {
@@ -55,8 +55,10 @@ export function parseBackup(text: string): Backup {
 /** Заменить все данные на телефоне данными из копии (всё или ничего). */
 export async function importBackup(db: DB, data: Backup): Promise<{ items: number; orders: number; moves: number }> {
   await inTransaction(db, async (tx) => {
+    // папки ссылаются друг на друга — проверка ссылок в конце транзакции
+    await tx.execAsync('PRAGMA defer_foreign_keys = ON');
     for (const t of [...TABLES].reverse()) await tx.runAsync(`DELETE FROM ${t}`);
-    await tx.runAsync("DELETE FROM sqlite_sequence WHERE name IN ('items', 'cells', 'orders', 'order_lines', 'moves')").catch(() => undefined);
+    await tx.runAsync("DELETE FROM sqlite_sequence WHERE name IN ('item_groups', 'items', 'racks', 'cells', 'orders', 'order_lines', 'moves')").catch(() => undefined);
     for (const t of TABLES) {
       const cols = new Set((await tx.getAllAsync<{ name: string }>(`PRAGMA table_info(${t})`)).map((c) => c.name));
       for (const row of data.tables[t] ?? []) {

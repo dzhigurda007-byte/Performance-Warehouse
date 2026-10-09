@@ -3,7 +3,7 @@ import { FlatList, KeyboardAvoidingView, Modal, Pressable, ScrollView, Text, Tex
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Empty, Field, ListRow, Muted, SearchBox, colors, s, showError } from '../../components/ui';
 import { formatQty, parseQty } from '../../core/codes';
-import { cells, items, type CellRow, type ItemRow } from '../core/service';
+import { cells, groups, items, type CellRow, type Group, type ItemRow } from '../core/service';
 import { useDb } from '../lib/db';
 
 function Sheet({ visible, title, onClose, children }: { visible: boolean; title: string; onClose: () => void; children: React.ReactNode }) {
@@ -135,6 +135,80 @@ export function QtyModal({ visible, title, subtitle, initial = '1', allowZero, o
             <View style={[s.rowWrap, { marginTop: 8 }]}>
               <Button title="Отмена" variant="ghost" style={{ flex: 1 }} onPress={onClose} />
               <Button title="OK" style={{ flex: 1 }} onPress={ok} />
+            </View>
+          </Pressable>
+        </Pressable>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+/** Полные названия папок: «Техника / Бытовая / Кухонные комбайны». */
+export function groupPaths(all: Group[]): Map<number, string> {
+  const byId = new Map(all.map((g) => [g.id, g]));
+  const out = new Map<number, string>();
+  for (const g of all) {
+    const parts: string[] = [];
+    let cur: Group | undefined = g;
+    while (cur && parts.length < 50) {
+      parts.unshift(cur.name);
+      cur = cur.parent_id ? byId.get(cur.parent_id) : undefined;
+    }
+    out.set(g.id, parts.join(' / '));
+  }
+  return out;
+}
+
+/** Выбор папки товаров (null — без папки). */
+export function GroupPicker({ visible, onClose, onPick, title = 'Выберите папку', exclude }: {
+  visible: boolean; onClose: () => void; onPick: (groupId: number | null, path: string) => void; title?: string; exclude?: number;
+}) {
+  const db = useDb();
+  const [q, setQ] = useState('');
+  const [list, setList] = useState<{ id: number; path: string }[]>([]);
+  useEffect(() => {
+    if (!visible) return;
+    groups.all(db).then((all) => {
+      const paths = groupPaths(all);
+      const ex = exclude ? paths.get(exclude) : undefined;
+      setList([...paths].map(([id, path]) => ({ id, path }))
+        .filter((g) => !ex || (g.path !== ex && !g.path.startsWith(`${ex} / `)))
+        .sort((a, b) => a.path.localeCompare(b.path, 'ru')));
+    }).catch(showError);
+  }, [db, visible, exclude]);
+  const shown = q.trim() ? list.filter((g) => g.path.toLowerCase().includes(q.trim().toLowerCase())) : list;
+  return (
+    <Sheet visible={visible} title={title} onClose={onClose}>
+      <View style={{ paddingHorizontal: 16 }}>
+        <SearchBox value={q} onChangeText={setQ} placeholder="Название папки" />
+      </View>
+      <FlatList data={shown} keyExtractor={(g) => String(g.id)} keyboardShouldPersistTaps="handled"
+        ListHeaderComponent={<ListRow title="Без папки (корень)" left={<Text style={{ fontSize: 18 }}>⌂</Text>} onPress={() => onPick(null, '')} />}
+        ListEmptyComponent={<Empty text="Папок нет" />}
+        renderItem={({ item: g }) => (
+          <ListRow title={g.path.split(' / ').pop()!} subtitle={g.path.includes(' / ') ? g.path : undefined}
+            left={<Text style={{ fontSize: 18 }}>📁</Text>} onPress={() => onPick(g.id, g.path)} />
+        )} />
+    </Sheet>
+  );
+}
+
+/** Ввод строки (название папки). */
+export function TextModal({ visible, title, label, initial = '', onClose, onSubmit }: {
+  visible: boolean; title: string; label?: string; initial?: string; onClose: () => void; onSubmit: (text: string) => void;
+}) {
+  const [v, setV] = useState(initial);
+  useEffect(() => { if (visible) setV(initial); }, [visible, initial]);
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+        <Pressable onPress={onClose} style={{ flex: 1, backgroundColor: '#0008', justifyContent: 'center', padding: 24 }}>
+          <Pressable style={[s.card, { maxWidth: 420, width: '100%', alignSelf: 'center' }]}>
+            <Text style={{ fontSize: 17, fontWeight: '700', color: colors.text, marginBottom: 8 }}>{title}</Text>
+            <Field label={label ?? 'Название'} value={v} onChangeText={setV} autoFocus onSubmitEditing={() => onSubmit(v)} />
+            <View style={s.rowWrap}>
+              <Button title="Отмена" variant="ghost" style={{ flex: 1 }} onPress={onClose} />
+              <Button title="OK" style={{ flex: 1 }} disabled={!v.trim()} onPress={() => onSubmit(v)} />
             </View>
           </Pressable>
         </Pressable>

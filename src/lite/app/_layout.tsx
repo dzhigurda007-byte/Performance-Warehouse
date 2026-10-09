@@ -21,7 +21,9 @@ export default function RootLayout() {
           <Stack.Screen name="item/[id]" options={{ title: 'Товар' }} />
           <Stack.Screen name="order/[id]" options={{ title: 'Ордер' }} />
           <Stack.Screen name="cell/[id]" options={{ title: 'Ячейка' }} />
-          <Stack.Screen name="cells" options={{ title: 'Ячейки' }} />
+          <Stack.Screen name="cells" options={{ title: 'Стеллажи и ячейки' }} />
+          <Stack.Screen name="rack/[id]" options={{ title: 'Ряд' }} />
+          <Stack.Screen name="move" options={{ title: 'Перемещение' }} />
           <Stack.Screen name="backup" options={{ title: 'Резервная копия' }} />
         </Stack>
       </DbProvider>

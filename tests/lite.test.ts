@@ -4,7 +4,7 @@ import type { DB } from '../src/core/db';
 import { exportBackup, importBackup, parseBackup } from '../src/lite/core/backup';
 import { orderHtml } from '../src/lite/core/forms';
 import { migrateLite } from '../src/lite/core/schema';
-import { cellQr, cells, history, items, moveStock, orders, summary, warehouse } from '../src/lite/core/service';
+import { cellQr, cells, groups, history, items, moveMany, moveStock, orders, racks, summary, warehouse } from '../src/lite/core/service';
 import { openTestDb } from './helpers/fakeDb';
 
 let db: DB;
@@ -44,7 +44,7 @@ test('приход и расход меняют остаток; расход с�
   await receive([{ itemId: bolt, qty: 10, cellId: a1 }, { itemId: bolt, qty: 2 }]);
   let it = (await items.get(db, bolt))!;
   assert.equal(it.qty, 12);
-  assert.deepEqual((await items.places(db, bolt)).map((p) => [p.code, p.qty]), [['A-01', 10], ['ОСН', 2]]);
+  assert.deepEqual((await items.places(db, bolt)).map((p) => [p.code, p.qty]), [['ОСН', 2], ['A-01', 10]]);
 
   const out = await orders.create(db, 'issue');
   const line = await orders.addLine(db, out, { itemId: bolt, qty: 11 }); // ячейка с наибольшим остатком
@@ -133,4 +133,69 @@ test('печатная форма ордера содержит артикул, 
   assert.match(html, /SPP-1001/);
   assert.match(html, /ООО &lt;Ромашка&gt;/);
   assert.match(html, /Получил/);
+});
+
+test('ряд стеллажей: полки и ячейки A-1-1 … A-5-40, изменение размера', async () => {
+  const r = await racks.save(db, { code: 'a', shelves: 5, cellsPerShelf: 40 });
+  assert.equal(r.added, 200);
+  const list = await cells.list(db, '', { rackId: r.id });
+  assert.equal(list.length, 200);
+  assert.deepEqual(list.slice(0, 3).map((c) => c.code), ['A-1-1', 'A-1-2', 'A-1-3']);
+  assert.equal(list[39].code, 'A-1-40'); // числовой порядок, не A-1-10 после A-1-1
+  assert.equal((await cells.list(db, '', { rackId: r.id, shelf: 5 })).length, 40);
+  assert.equal((await cells.findByCode(db, cellQr('A-5-40')))?.shelf, 5);
+  await assert.rejects(racks.save(db, { code: 'A', shelves: 1, cellsPerShelf: 1 }), /уже есть/);
+  await assert.rejects(racks.save(db, { code: 'A-1', shelves: 1, cellsPerShelf: 1 }), /дефиса/);
+
+  // увеличить и уменьшить
+  assert.equal((await racks.save(db, { id: r.id, code: 'A', shelves: 6, cellsPerShelf: 40 })).added, 40);
+  const a240 = (await cells.findByCode(db, 'A-2-40'))!;
+  await receive([{ itemId: bolt, qty: 1, cellId: a240.id }]);
+  await assert.rejects(racks.save(db, { id: r.id, code: 'A', shelves: 6, cellsPerShelf: 30 }), /A-2-40 уже использовалась/);
+  const res = await racks.save(db, { id: r.id, code: 'A', shelves: 5, cellsPerShelf: 40 });
+  assert.equal(res.removed, 40);
+  assert.equal((await racks.list(db))[0].busy, 1);
+  await assert.rejects(racks.remove(db, r.id), /использовались/);
+  const b = await racks.save(db, { code: 'B', shelves: 2, cellsPerShelf: 3 });
+  await racks.remove(db, b.id);
+  assert.equal(await cells.findByCode(db, 'B-1-1'), null);
+});
+
+test('перемещение нескольких товаров одной операцией; где лежит товар', async () => {
+  const nut = await items.save(db, { article: 'N-10', name: 'Гайка М10' });
+  await receive([{ itemId: bolt, qty: 5, cellId: a1 }, { itemId: nut, qty: 10, cellId: a1 }]);
+  await assert.rejects(moveMany(db, { fromCellId: a1, toCellId: main, lines: [{ itemId: bolt, qty: 2 }, { itemId: nut, qty: 11 }] }), /только 10/);
+  assert.equal((await items.get(db, nut))!.places, 'A-01: 10'); // откат: ничего не переместилось
+  await moveMany(db, { fromCellId: a1, toCellId: main, lines: [{ itemId: bolt, qty: 2 }, { itemId: nut, qty: 10 }, { itemId: bolt, qty: 1 }] });
+  const b = (await items.get(db, bolt))!;
+  assert.equal(b.places, 'ОСН: 3, A-01: 2');
+  assert.equal((await history(db, { kind: 'move' })).length, 2);
+});
+
+test('папки товаров: вложенность, количество с подпапками, сортировка и поиск по всей базе', async () => {
+  const tech = await groups.save(db, { name: 'Техника' });
+  const home = await groups.save(db, { name: 'Бытовая', parent_id: tech });
+  const kitchen = await groups.save(db, { name: 'Кухонные комбайны', parent_id: home });
+  await assert.rejects(groups.save(db, { name: 'бытовая', parent_id: tech }), /уже есть/);
+  await assert.rejects(groups.save(db, { id: tech, name: 'Техника', parent_id: kitchen }), /саму в себя/);
+  const k1 = await items.save(db, { article: 'K-1', name: 'Комбайн Bosch', group_id: kitchen });
+  await items.save(db, { article: 'K-2', name: 'Комбайн Philips', group_id: kitchen });
+  await items.setGroup(db, [bolt], home);
+  const root = await groups.children(db, null);
+  assert.deepEqual(root.map((g) => [g.name, g.items, g.subgroups]), [['Техника', 3, 1]]);
+  assert.deepEqual((await groups.path(db, kitchen)).map((g) => g.name), ['Техника', 'Бытовая', 'Кухонные комбайны']);
+  assert.deepEqual((await items.list(db, { groupId: kitchen, sort: 'name_desc' })).map((i) => i.article), ['K-2', 'K-1']);
+  assert.equal((await items.list(db, { groupId: null })).length, 0);
+  assert.equal((await items.list(db, { groupId: null, search: 'bosch' }))[0].id, k1); // поиск — по всей базе
+  await groups.remove(db, home);
+  assert.equal((await groups.children(db, tech))[0].name, 'Кухонные комбайны');
+  assert.equal((await items.get(db, bolt))!.group_id, tech);
+
+  // копия переносит папки и стеллажи
+  await racks.save(db, { code: 'C', shelves: 1, cellsPerShelf: 2 });
+  const other = openTestDb();
+  await migrateLite(other);
+  await importBackup(other, parseBackup(JSON.stringify(await exportBackup(db))));
+  assert.equal((await groups.children(other, tech))[0].items, 2);
+  assert.equal((await racks.list(other))[0].cells, 2);
 });

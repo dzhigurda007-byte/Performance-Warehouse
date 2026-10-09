@@ -2,7 +2,7 @@ import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { QrView } from '../../../components/QrView';
-import { Button, Card, Empty, Field, ListRow, Section, confirm, notify, s, showError, useFocusLoad } from '../../../components/ui';
+import { Button, Card, Empty, Field, ListRow, Muted, Section, confirm, notify, s, showError, useFocusLoad } from '../../../components/ui';
 import { formatQty } from '../../../core/codes';
 import { labelsHtml } from '../../../lib/labelsHtml';
 import { saveHtml } from '../../../lib/printHtml';
@@ -58,7 +58,8 @@ export default function CellScreen() {
           onPress={() => saveHtml(labelsHtml([cellLabel(cell)], 'single'), `Ячейка ${cell.code}`).catch(showError)} />
       </Card>
       <Card>
-        <Field label="Код" value={code} onChangeText={setCode} autoCapitalize="characters" editable={cell.code !== MAIN_CELL_CODE} />
+        {cell.rack_id ? <Muted>Ряд стеллажа · полка {cell.shelf} · ячейка {cell.pos}</Muted> : null}
+        <Field label="Код" value={code} onChangeText={setCode} autoCapitalize="characters" editable={cell.code !== MAIN_CELL_CODE && !cell.rack_id} />
         <Field label="Описание" value={name} onChangeText={setName} />
         <Field label="Комментарий" value={comment} onChangeText={setComment} />
         <Button title="Сохранить" onPress={save} />
@@ -71,8 +72,10 @@ export default function CellScreen() {
           )) : <Empty text="Ячейка пуста" />}
         </View>
       </Section>
+      {data.items.length ? <Button title="Переместить из этой ячейки" icon="⇄" variant="secondary"
+        onPress={() => router.push({ pathname: '/move', params: { from: String(id) } })} /> : null}
       <Button title="История по ячейке" icon="↻" variant="ghost" onPress={() => router.push({ pathname: '/history', params: { cellId: String(id) } })} />
-      {cell.code !== MAIN_CELL_CODE ? <Button title="Удалить ячейку" variant="danger" onPress={remove} /> : null}
+      {cell.code !== MAIN_CELL_CODE && !cell.rack_id ? <Button title="Удалить ячейку" variant="danger" onPress={remove} /> : null}
     </ScrollView>
   );
 }

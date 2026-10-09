@@ -10,13 +10,13 @@ module.exports = ({ config }) => {
     ...config,
     name: 'PerformanceWarehouseLite',
     slug: 'performance-warehouse-lite',
-    version: '1.0.0',
+    version: '1.1.0',
     scheme: 'pwlite',
     ios: { ...config.ios, bundleIdentifier: 'com.performance.warehouse.lite' },
     android: {
       ...config.android,
       package: 'com.performance.warehouse.lite',
-      versionCode: 1,
+      versionCode: 2,
     },
     plugins: config.plugins
       .filter((p) => !(Array.isArray(p) && p[0] === 'expo-build-properties'))

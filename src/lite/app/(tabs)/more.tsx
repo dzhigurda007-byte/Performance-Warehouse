@@ -51,7 +51,8 @@ export default function MoreTab() {
 
       <Section title="Хранение и данные">
         <View style={{ borderRadius: 12, overflow: 'hidden' }}>
-          <ListRow title="Ячейки" subtitle="Адреса хранения, QR-этикетки" right="›" onPress={() => router.push('/cells')} />
+          <ListRow title="Стеллажи и ячейки" subtitle="Ряды, полки, ячейки A-1-1, QR-этикетки" right="›" onPress={() => router.push('/cells')} />
+          <ListRow title="Перемещение между ячейками" subtitle="Скан: ячейка откуда → товар → ячейка куда" right="›" onPress={() => router.push('/move')} />
           <ListRow title="Резервная копия" subtitle="Сохранить базу или перенести на другой телефон" right="›" onPress={() => router.push('/backup')} />
         </View>
       </Section>

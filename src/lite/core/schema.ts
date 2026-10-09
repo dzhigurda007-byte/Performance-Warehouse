@@ -4,7 +4,7 @@ import type { DB } from '../../core/db';
  * База PerformanceWarehouseLite — хранится только в телефоне.
  * Отдельная от полной версии: один пользователь (администратор), без регистрации.
  */
-export const LITE_SCHEMA_VERSION = 1;
+export const LITE_SCHEMA_VERSION = 2;
 
 /** Ячейка «Основная» есть всегда — товар без адресного хранения лежит в ней. */
 export const MAIN_CELL_CODE = 'ОСН';
@@ -80,13 +80,49 @@ CREATE INDEX IF NOT EXISTS moves_at ON moves(at);
 CREATE INDEX IF NOT EXISTS moves_item ON moves(item_id);
 `;
 
+/** v2: стеллажи (ряд → полки → ячейки A-1-1), папки (группы) товаров. */
+const V2 = [
+  'ALTER TABLE cells ADD COLUMN rack_id INTEGER REFERENCES racks(id)',
+  'ALTER TABLE cells ADD COLUMN shelf INTEGER',
+  'ALTER TABLE cells ADD COLUMN pos INTEGER',
+  'ALTER TABLE items ADD COLUMN group_id INTEGER REFERENCES item_groups(id)',
+];
+
+const V2_TABLES = `
+CREATE TABLE IF NOT EXISTS racks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT NOT NULL UNIQUE,
+  name TEXT,
+  shelves INTEGER NOT NULL,
+  cells_per_shelf INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+CREATE TABLE IF NOT EXISTS item_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  parent_id INTEGER REFERENCES item_groups(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+`;
+
+async function columns(db: DB, table: string) {
+  return new Set((await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${table})`)).map((c) => c.name));
+}
+
 export async function migrateLite(db: DB): Promise<void> {
   await db.execAsync('PRAGMA foreign_keys = ON;');
   await db.execAsync(V1);
-  const row = await db.getFirstAsync<{ value: string }>("SELECT value FROM meta WHERE key = 'schema'");
-  if (!row) {
-    await db.runAsync("INSERT INTO meta(key, value) VALUES('schema', ?)", String(LITE_SCHEMA_VERSION));
+  await db.execAsync(V2_TABLES);
+  const cellCols = await columns(db, 'cells');
+  const itemCols = await columns(db, 'items');
+  for (const sql of V2) {
+    const m = /ALTER TABLE (\w+) ADD COLUMN (\w+)/.exec(sql)!;
+    const have = m[1] === 'cells' ? cellCols : itemCols;
+    if (!have.has(m[2])) await db.execAsync(sql);
   }
+  await db.execAsync('CREATE INDEX IF NOT EXISTS cells_rack ON cells(rack_id, shelf, pos); CREATE INDEX IF NOT EXISTS items_group ON items(group_id);');
+  await db.runAsync(
+    "INSERT INTO meta(key, value) VALUES('schema', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", String(LITE_SCHEMA_VERSION));
   await ensureMainCell(db);
 }
 

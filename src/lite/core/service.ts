@@ -17,12 +17,15 @@ export interface Item {
   barcode: string | null;
   unit: string;
   comment: string | null;
+  group_id: number | null;
   created_at: string;
 }
 
 export interface ItemRow extends Item {
   qty: number;
   last_receipt: string | null;
+  /** Где лежит: «A-1-1: 5, A-1-2: 3». */
+  places: string | null;
 }
 
 export interface Cell {
@@ -30,6 +33,9 @@ export interface Cell {
   code: string;
   name: string | null;
   comment: string | null;
+  rack_id: number | null;
+  shelf: number | null;
+  pos: number | null;
 }
 
 export interface CellRow extends Cell {
@@ -145,25 +151,46 @@ export const warehouse = {
 
 /* ─────────────── номенклатура ─────────────── */
 
+/** Порядок ячеек: основная, затем по ряду, полке и номеру (A-1-2 раньше A-1-10), затем прочие. */
+const CELL_ORDER = `c.code = '${MAIN_CELL_CODE}' DESC, c.rack_id IS NULL,
+  (SELECT code FROM racks r WHERE r.id = c.rack_id) COLLATE NOCASE, c.shelf, c.pos, c.code COLLATE NOCASE`;
+
+const ITEM_EXTRA = `COALESCE((SELECT SUM(qty) FROM stock s WHERE s.item_id = i.id), 0) AS qty,
+  (SELECT MAX(at) FROM moves m WHERE m.item_id = i.id AND m.kind = 'receipt') AS last_receipt,
+  (SELECT GROUP_CONCAT(code || ': ' || q, ', ') FROM (
+     SELECT c.code, CASE WHEN s.qty = CAST(s.qty AS INTEGER) THEN CAST(CAST(s.qty AS INTEGER) AS TEXT) ELSE CAST(s.qty AS TEXT) END AS q FROM stock s JOIN cells c ON c.id = s.cell_id
+      WHERE s.item_id = i.id AND s.qty > 0 ORDER BY ${CELL_ORDER})) AS places`;
+
 export type StockFilter = 'all' | 'in' | 'out';
-export type ItemSort = 'name' | 'article' | 'qty' | 'date';
+export type ItemSort = 'name' | 'name_desc' | 'article' | 'spp' | 'qty' | 'qty_asc' | 'date';
 
 export const items = {
-  async list(db: DB, opts: { search?: string; filter?: StockFilter; sort?: ItemSort } = {}): Promise<ItemRow[]> {
+  /**
+   * Список товаров. groupId: число — товары папки, null — товары без папки (корень), не задан — все.
+   * При поиске папка не учитывается — ищется по всей базе.
+   */
+  async list(db: DB, opts: { search?: string; filter?: StockFilter; sort?: ItemSort; groupId?: number | null } = {}): Promise<ItemRow[]> {
     const where = ['i.deleted_at IS NULL'];
     const params: SqlParam[] = [];
     if (opts.search?.trim()) {
       where.push('i.search LIKE ?');
       params.push(likeFold(opts.search));
+    } else if (opts.groupId !== undefined) {
+      if (opts.groupId === null) where.push('i.group_id IS NULL');
+      else { where.push('i.group_id = ?'); params.push(opts.groupId); }
     }
     const having = opts.filter === 'in' ? 'HAVING qty > 0' : opts.filter === 'out' ? 'HAVING qty <= 0' : '';
-    const order = opts.sort === 'article' ? 'i.article COLLATE NOCASE'
-      : opts.sort === 'qty' ? 'qty DESC, i.name COLLATE NOCASE'
-        : opts.sort === 'date' ? 'last_receipt IS NULL, last_receipt DESC, i.name COLLATE NOCASE'
-          : 'i.name COLLATE NOCASE';
+    const order = {
+      name: 'i.name COLLATE NOCASE',
+      name_desc: 'i.name COLLATE NOCASE DESC',
+      article: 'i.article COLLATE NOCASE',
+      spp: 'i.spp IS NULL, i.spp COLLATE NOCASE',
+      qty: 'qty DESC, i.name COLLATE NOCASE',
+      qty_asc: 'qty, i.name COLLATE NOCASE',
+      date: 'last_receipt IS NULL, last_receipt DESC, i.name COLLATE NOCASE',
+    }[opts.sort ?? 'name'];
     return db.getAllAsync<ItemRow>(
-      `SELECT i.*, COALESCE((SELECT SUM(qty) FROM stock s WHERE s.item_id = i.id), 0) AS qty,
-              (SELECT MAX(at) FROM moves m WHERE m.item_id = i.id AND m.kind = 'receipt') AS last_receipt
+      `SELECT i.*, ${ITEM_EXTRA}
          FROM items i WHERE ${where.join(' AND ')} ${having ? `GROUP BY i.id ${having}` : ''}
         ORDER BY ${order}`,
       ...params,
@@ -172,20 +199,18 @@ export const items = {
 
   async get(db: DB, id: number): Promise<ItemRow | null> {
     return db.getFirstAsync<ItemRow>(
-      `SELECT i.*, COALESCE((SELECT SUM(qty) FROM stock s WHERE s.item_id = i.id), 0) AS qty,
-              (SELECT MAX(at) FROM moves m WHERE m.item_id = i.id AND m.kind = 'receipt') AS last_receipt
-         FROM items i WHERE i.id = ?`, id);
+      `SELECT i.*, ${ITEM_EXTRA} FROM items i WHERE i.id = ?`, id);
   },
 
   async places(db: DB, itemId: number): Promise<StockPlace[]> {
     return db.getAllAsync<StockPlace>(
       `SELECT c.id AS cell_id, c.code, c.name, s.qty FROM stock s JOIN cells c ON c.id = s.cell_id
-        WHERE s.item_id = ? AND s.qty > 0 ORDER BY c.code COLLATE NOCASE`, itemId);
+        WHERE s.item_id = ? AND s.qty > 0 ORDER BY ${CELL_ORDER}`, itemId);
   },
 
   /** Создать или изменить товар. Артикул и наименование обязательны, артикул / ШК / SPP — без повторов. */
   async save(db: DB, data: { id?: number; article: string; name: string; spp?: string | null; barcode?: string | null;
-    unit?: string | null; comment?: string | null }): Promise<number> {
+    unit?: string | null; comment?: string | null; group_id?: number | null }): Promise<number> {
     const rec = {
       article: (data.article ?? '').trim(),
       name: (data.name ?? '').trim(),
@@ -193,6 +218,7 @@ export const items = {
       barcode: emptyToNull(data.barcode),
       unit: emptyToNull(data.unit) ?? 'шт',
       comment: emptyToNull(data.comment),
+      group_id: data.group_id ?? null,
     };
     if (!rec.article) throw new BusinessError('Укажите артикул');
     if (!rec.name) throw new BusinessError('Укажите наименование');
@@ -209,14 +235,19 @@ export const items = {
     const search = searchText(rec);
     if (data.id) {
       await db.runAsync(
-        'UPDATE items SET article = ?, name = ?, spp = ?, barcode = ?, unit = ?, comment = ?, search = ? WHERE id = ?',
-        rec.article, rec.name, rec.spp, rec.barcode, rec.unit, rec.comment, search, data.id);
+        'UPDATE items SET article = ?, name = ?, spp = ?, barcode = ?, unit = ?, comment = ?, search = ?, group_id = ? WHERE id = ?',
+        rec.article, rec.name, rec.spp, rec.barcode, rec.unit, rec.comment, search, rec.group_id, data.id);
       return data.id;
     }
     const r = await db.runAsync(
-      'INSERT INTO items(article, name, spp, barcode, unit, comment, search) VALUES(?, ?, ?, ?, ?, ?, ?)',
-      rec.article, rec.name, rec.spp, rec.barcode, rec.unit, rec.comment, search);
+      'INSERT INTO items(article, name, spp, barcode, unit, comment, search, group_id) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
+      rec.article, rec.name, rec.spp, rec.barcode, rec.unit, rec.comment, search, rec.group_id);
     return r.lastInsertRowId;
+  },
+
+  /** Переложить товары в папку (null — в корень). */
+  async setGroup(db: DB, ids: number[], groupId: number | null) {
+    for (const id of ids) await db.runAsync('UPDATE items SET group_id = ? WHERE id = ?', groupId, id);
   },
 
   /** Удалить из номенклатуры можно только товар без остатка (история движений сохраняется). */
@@ -247,17 +278,20 @@ export const items = {
 /* ─────────────── ячейки ─────────────── */
 
 export const cells = {
-  async list(db: DB, search = ''): Promise<CellRow[]> {
+  async list(db: DB, search = '', opts: { rackId?: number | null; shelf?: number | null; loose?: boolean } = {}): Promise<CellRow[]> {
     const params: SqlParam[] = [];
-    let where = '';
+    const where: string[] = [];
     if (search.trim()) {
-      where = 'WHERE c.code LIKE ? OR c.name LIKE ?';
+      where.push('(c.code LIKE ? OR c.name LIKE ?)');
       params.push(`%${search.trim()}%`, `%${search.trim()}%`);
     }
+    if (opts.rackId) { where.push('c.rack_id = ?'); params.push(opts.rackId); }
+    if (opts.shelf) { where.push('c.shelf = ?'); params.push(opts.shelf); }
+    if (opts.loose) where.push('c.rack_id IS NULL');
     return db.getAllAsync<CellRow>(
       `SELECT c.*, (SELECT COUNT(*) FROM stock s WHERE s.cell_id = c.id AND s.qty > 0) AS positions,
               COALESCE((SELECT SUM(qty) FROM stock s WHERE s.cell_id = c.id), 0) AS qty
-         FROM cells c ${where} ORDER BY c.code = '${MAIN_CELL_CODE}' DESC, c.code COLLATE NOCASE`, ...params);
+         FROM cells c ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY ${CELL_ORDER}`, ...params);
   },
 
   async get(db: DB, id: number): Promise<Cell | null> {
@@ -280,6 +314,7 @@ export const cells = {
     if (data.id) {
       const cur = await cells.get(db, data.id);
       if (cur?.code === MAIN_CELL_CODE && code !== MAIN_CELL_CODE) throw new BusinessError('Код основной ячейки менять нельзя');
+      if (cur?.rack_id && code !== cur.code) throw new BusinessError('Код ячейки стеллажа задаётся рядом, полкой и номером — его менять нельзя');
       await db.runAsync('UPDATE cells SET code = ?, name = ?, comment = ? WHERE id = ?', code, emptyToNull(data.name), emptyToNull(data.comment), data.id);
       return data.id;
     }
@@ -351,6 +386,195 @@ export async function moveStock(db: DB, p: { itemId: number; fromCellId: number;
       'move', p.itemId, p.fromCellId, p.toCellId, qty, emptyToNull(p.comment));
   });
 }
+
+/**
+ * Перемещение нескольких товаров из одной ячейки в другую одной операцией:
+ * скан ячейки «откуда» → сканы товаров → скан ячейки «куда». Всё или ничего.
+ */
+export async function moveMany(db: DB, p: { fromCellId: number; toCellId: number; lines: { itemId: number; qty: number }[]; comment?: string | null }) {
+  if (!p.lines.length) throw new BusinessError('Не выбран ни один товар');
+  if (p.fromCellId === p.toCellId) throw new BusinessError('Ячейки «откуда» и «куда» совпадают');
+  const sum = new Map<number, number>();
+  for (const l of p.lines) sum.set(l.itemId, round3((sum.get(l.itemId) ?? 0) + checkQty(l.qty)));
+  await inTransaction(db, async (tx) => {
+    for (const [itemId, qty] of sum) await moveStock(tx, { itemId, fromCellId: p.fromCellId, toCellId: p.toCellId, qty, comment: p.comment });
+  });
+}
+
+/* ─────────────── стеллажи: ряд → полки → ячейки ─────────────── */
+
+export interface Rack {
+  id: number;
+  code: string;
+  name: string | null;
+  shelves: number;
+  cells_per_shelf: number;
+}
+
+export interface RackRow extends Rack {
+  cells: number;
+  busy: number;
+  qty: number;
+}
+
+/** Код ячейки стеллажа: ряд-полка-ячейка, например A-1-1 (полка 1 — нижняя). */
+export const rackCellCode = (rack: string, shelf: number, pos: number) => `${rack}-${shelf}-${pos}`;
+
+export const racks = {
+  async list(db: DB): Promise<RackRow[]> {
+    return db.getAllAsync<RackRow>(
+      `SELECT r.*, (SELECT COUNT(*) FROM cells c WHERE c.rack_id = r.id) AS cells,
+              (SELECT COUNT(DISTINCT s.cell_id) FROM stock s JOIN cells c ON c.id = s.cell_id WHERE c.rack_id = r.id AND s.qty > 0) AS busy,
+              COALESCE((SELECT SUM(s.qty) FROM stock s JOIN cells c ON c.id = s.cell_id WHERE c.rack_id = r.id), 0) AS qty
+         FROM racks r ORDER BY r.code COLLATE NOCASE`);
+  },
+
+  async get(db: DB, id: number): Promise<Rack | null> {
+    return db.getFirstAsync<Rack>('SELECT * FROM racks WHERE id = ?', id);
+  },
+
+  /**
+   * Создать ряд или изменить его размер: shelves полок по cellsPerShelf ячеек, ячейки A-1-1 … A-5-40.
+   * При уменьшении лишние ячейки удаляются, только если они пустые и нигде не использовались.
+   */
+  async save(db: DB, data: { id?: number; code: string; name?: string | null; shelves: number; cellsPerShelf: number }): Promise<{ id: number; added: number; removed: number }> {
+    const code = (data.code ?? '').trim().toUpperCase().replace(/\s+/g, '');
+    if (!code) throw new BusinessError('Укажите ряд, например A');
+    if (code.includes('-')) throw new BusinessError('В обозначении ряда не должно быть дефиса — он разделяет ряд, полку и ячейку');
+    const sh = Number(data.shelves);
+    const cp = Number(data.cellsPerShelf);
+    if (!Number.isInteger(sh) || sh < 1 || sh > 50) throw new BusinessError('Полок — от 1 до 50');
+    if (!Number.isInteger(cp) || cp < 1 || cp > 200) throw new BusinessError('Ячеек на полке — от 1 до 200');
+    const dup = await db.getFirstAsync<{ id: number }>('SELECT id FROM racks WHERE code = ? AND id <> ?', code, data.id ?? 0);
+    if (dup) throw new BusinessError(`Ряд ${code} уже есть`);
+    let id = data.id ?? 0;
+    let added = 0;
+    let removed = 0;
+    await inTransaction(db, async (tx) => {
+      if (id) {
+        const cur = await racks.get(tx, id);
+        if (!cur) throw new BusinessError('Ряд не найден');
+        if (cur.code !== code) {
+          const busy = await tx.getFirstAsync<{ n: number }>(
+            `SELECT COUNT(*) AS n FROM cells c WHERE c.rack_id = ? AND (EXISTS (SELECT 1 FROM moves m WHERE m.cell_id = c.id OR m.to_cell_id = c.id)
+               OR EXISTS (SELECT 1 FROM order_lines l WHERE l.cell_id = c.id) OR EXISTS (SELECT 1 FROM stock s WHERE s.cell_id = c.id AND s.qty > 0))`, id);
+          if (busy?.n) throw new BusinessError('Ячейки ряда уже использовались — переименовать ряд нельзя (этикетки уже наклеены)');
+          await tx.runAsync("UPDATE cells SET code = ? || '-' || shelf || '-' || pos WHERE rack_id = ?", code, id);
+        }
+        // лишние ячейки (полки выше / номера дальше)
+        const extra = await tx.getAllAsync<{ id: number; code: string }>(
+          'SELECT id, code FROM cells WHERE rack_id = ? AND (shelf > ? OR pos > ?)', id, sh, cp);
+        for (const c of extra) {
+          const used = await tx.getFirstAsync<{ n: number }>(
+            `SELECT (SELECT COUNT(*) FROM stock WHERE cell_id = ? AND qty > 0) + (SELECT COUNT(*) FROM moves WHERE cell_id = ? OR to_cell_id = ?)
+                  + (SELECT COUNT(*) FROM order_lines WHERE cell_id = ?) AS n`, c.id, c.id, c.id, c.id);
+          if (used?.n) throw new BusinessError(`Ячейка ${c.code} уже использовалась — уменьшить ряд нельзя`);
+          await tx.runAsync('DELETE FROM stock WHERE cell_id = ?', c.id);
+          await tx.runAsync('DELETE FROM cells WHERE id = ?', c.id);
+          removed++;
+        }
+        await tx.runAsync('UPDATE racks SET code = ?, name = ?, shelves = ?, cells_per_shelf = ? WHERE id = ?', code, emptyToNull(data.name), sh, cp, id);
+      } else {
+        id = (await tx.runAsync('INSERT INTO racks(code, name, shelves, cells_per_shelf) VALUES(?, ?, ?, ?)', code, emptyToNull(data.name), sh, cp)).lastInsertRowId;
+      }
+      for (let shelf = 1; shelf <= sh; shelf++) {
+        for (let pos = 1; pos <= cp; pos++) {
+          const cc = rackCellCode(code, shelf, pos);
+          const ex = await tx.getFirstAsync<{ id: number; rack_id: number | null }>('SELECT id, rack_id FROM cells WHERE code = ?', cc);
+          if (ex) {
+            if (ex.rack_id && ex.rack_id !== id) throw new BusinessError(`Ячейка ${cc} уже принадлежит другому ряду`);
+            if (!ex.rack_id) await tx.runAsync('UPDATE cells SET rack_id = ?, shelf = ?, pos = ? WHERE id = ?', id, shelf, pos, ex.id);
+            continue;
+          }
+          await tx.runAsync('INSERT INTO cells(code, rack_id, shelf, pos) VALUES(?, ?, ?, ?)', cc, id, shelf, pos);
+          added++;
+        }
+      }
+    });
+    return { id, added, removed };
+  },
+
+  /** Удалить ряд: только если все его ячейки пустые и не использовались. */
+  async remove(db: DB, id: number) {
+    await inTransaction(db, async (tx) => {
+      const used = await tx.getFirstAsync<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM cells c WHERE c.rack_id = ? AND (EXISTS (SELECT 1 FROM moves m WHERE m.cell_id = c.id OR m.to_cell_id = c.id)
+           OR EXISTS (SELECT 1 FROM order_lines l WHERE l.cell_id = c.id) OR EXISTS (SELECT 1 FROM stock s WHERE s.cell_id = c.id AND s.qty > 0))`, id);
+      if (used?.n) throw new BusinessError('Ячейки ряда уже использовались — удалить ряд нельзя');
+      await tx.runAsync('DELETE FROM stock WHERE cell_id IN (SELECT id FROM cells WHERE rack_id = ?)', id);
+      await tx.runAsync('DELETE FROM cells WHERE rack_id = ?', id);
+      await tx.runAsync('DELETE FROM racks WHERE id = ?', id);
+    });
+  },
+};
+
+/* ─────────────── папки (группы) товаров ─────────────── */
+
+export interface Group {
+  id: number;
+  name: string;
+  parent_id: number | null;
+}
+
+export interface GroupRow extends Group {
+  /** Товаров в папке вместе со всеми вложенными папками. */
+  items: number;
+  subgroups: number;
+}
+
+export const groups = {
+  async all(db: DB): Promise<Group[]> {
+    return db.getAllAsync<Group>('SELECT id, name, parent_id FROM item_groups ORDER BY name COLLATE NOCASE');
+  },
+
+  /** Папки внутри parentId (null — корень) с числом товаров, включая вложенные папки. */
+  async children(db: DB, parentId: number | null): Promise<GroupRow[]> {
+    const all = await groups.all(db);
+    const counts = new Map((await db.getAllAsync<{ group_id: number; n: number }>(
+      'SELECT group_id, COUNT(*) AS n FROM items WHERE deleted_at IS NULL AND group_id IS NOT NULL GROUP BY group_id')).map((r) => [r.group_id, r.n]));
+    const kids = (pid: number | null) => all.filter((g) => g.parent_id === pid);
+    const total = (gid: number): number => (counts.get(gid) ?? 0) + kids(gid).reduce((s, k) => s + total(k.id), 0);
+    return kids(parentId).map((g) => ({ ...g, items: total(g.id), subgroups: kids(g.id).length }));
+  },
+
+  /** Путь от корня до папки: [Техника, Бытовая, Кухонные комбайны]. */
+  async path(db: DB, id: number | null): Promise<Group[]> {
+    const all = new Map((await groups.all(db)).map((g) => [g.id, g]));
+    const out: Group[] = [];
+    let cur = id ? all.get(id) : undefined;
+    while (cur && out.length < 50) {
+      out.unshift(cur);
+      cur = cur.parent_id ? all.get(cur.parent_id) : undefined;
+    }
+    return out;
+  },
+
+  async save(db: DB, data: { id?: number; name: string; parent_id?: number | null }): Promise<number> {
+    const name = (data.name ?? '').trim();
+    if (!name) throw new BusinessError('Укажите название папки');
+    const parent = data.parent_id ?? null;
+    const siblings = await db.getAllAsync<{ id: number; name: string }>(
+      'SELECT id, name FROM item_groups WHERE parent_id IS ? AND id <> ?', parent, data.id ?? 0);
+    if (siblings.some((g) => fold(g.name) === fold(name))) throw new BusinessError(`Папка «${name}» здесь уже есть`);
+    if (data.id) {
+      if (parent && (await groups.path(db, parent)).some((g) => g.id === data.id)) throw new BusinessError('Нельзя вложить папку саму в себя');
+      await db.runAsync('UPDATE item_groups SET name = ?, parent_id = ? WHERE id = ?', name, parent, data.id);
+      return data.id;
+    }
+    return (await db.runAsync('INSERT INTO item_groups(name, parent_id) VALUES(?, ?)', name, parent)).lastInsertRowId;
+  },
+
+  /** Удалить папку: её товары и вложенные папки переходят в папку уровнем выше. */
+  async remove(db: DB, id: number) {
+    const g = await db.getFirstAsync<Group>('SELECT * FROM item_groups WHERE id = ?', id);
+    if (!g) return;
+    await inTransaction(db, async (tx) => {
+      await tx.runAsync('UPDATE items SET group_id = ? WHERE group_id = ?', g.parent_id, id);
+      await tx.runAsync('UPDATE item_groups SET parent_id = ? WHERE parent_id = ?', g.parent_id, id);
+      await tx.runAsync('DELETE FROM item_groups WHERE id = ?', id);
+    });
+  },
+};
 
 /* ─────────────── ордера ─────────────── */
 
